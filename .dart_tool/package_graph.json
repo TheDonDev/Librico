@@ -14,7 +14,8 @@
         "firebase_core",
         "firebase_messaging",
         "firebase_storage",
-        "flutter"
+        "flutter",
+        "http"
       ],
       "devDependencies": [
         "flutter_lints",
@@ -123,6 +124,16 @@
         "firebase_core_web",
         "flutter",
         "meta"
+      ]
+    },
+    {
+      "name": "http",
+      "version": "1.4.0",
+      "dependencies": [
+        "async",
+        "http_parser",
+        "meta",
+        "web"
       ]
     },
     {
@@ -455,13 +466,23 @@
       ]
     },
     {
-      "name": "sky_engine",
-      "version": "0.0.0",
+      "name": "web",
+      "version": "0.5.1",
       "dependencies": []
     },
     {
-      "name": "web",
-      "version": "0.5.1",
+      "name": "http_parser",
+      "version": "4.1.2",
+      "dependencies": [
+        "collection",
+        "source_span",
+        "string_scanner",
+        "typed_data"
+      ]
+    },
+    {
+      "name": "sky_engine",
+      "version": "0.0.0",
       "dependencies": []
     },
     {
@@ -492,26 +513,6 @@
       "version": "2.1.8",
       "dependencies": [
         "meta"
-      ]
-    },
-    {
-      "name": "http",
-      "version": "1.4.0",
-      "dependencies": [
-        "async",
-        "http_parser",
-        "meta",
-        "web"
-      ]
-    },
-    {
-      "name": "http_parser",
-      "version": "4.1.2",
-      "dependencies": [
-        "collection",
-        "source_span",
-        "string_scanner",
-        "typed_data"
       ]
     },
     {
