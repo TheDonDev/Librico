@@ -43,3 +43,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Node.js backend related (if backend is a subdirectory or to prevent accidental tracking)
+librico-backend/node_modules/
+librico-backend/.env
