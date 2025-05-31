@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "172789913782",
+    "project_id": "librico-cb904",
+    "storage_bucket": "librico-cb904.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:172789913782:android:329de57b91af035b9cee17",
+        "android_client_info": {
+          "package_name": "com.example.librico"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBP5QdXxuI6Uy0rfG0_nIItfdFSdJKPLK8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
