@@ -1,0 +1,28 @@
+{
+  "name": "library-manager",
+  "version": "1.0.0",
+  "description": "A desktop app to manage book borrowing.",
+  "main": "main.js",
+  "scripts": {
+    "start": "npm run build && electron .",
+    "dev": "concurrently \"npm run dev:react\" \"npm run dev:electron\"",
+    "dev:react": "cd renderer && npm run dev",
+    "dev:electron": "wait-on http://localhost:5173 && nodemon --exec \"electron .\"",
+    "build": "cd renderer && npm run build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "electron": "^29.1.4",
+    "nodemon": "^3.1.0",
+    "wait-on": "^7.2.0"
+  },
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "knex": "^3.1.0",
+    "nodemailer": "^7.0.10",
+    "sqlite3": "^5.1.7"
+  }
+}
