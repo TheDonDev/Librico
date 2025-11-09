@@ -6,13 +6,19 @@ const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 
-// Determine if we are in development mode
-const isDev = process.env.NODE_ENV !== 'production';
+// Handle creating/removing shortcuts on Windows when installing/uninstalling.
+if (require('electron-squirrel-startup')) {
+  app.quit();
+}
+
 
 function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
+    // The icon path for the window.
+    // In production, it's in the resources folder. In dev, it's in the root.
+    icon: path.join(__dirname, app.isPackaged ? '../resources/icon.ico' : 'build/icon.ico'),
     webPreferences: {
       // The preload script is the bridge between Node.js and the renderer (React)
       preload: path.join(__dirname, 'preload.js'),
@@ -26,12 +32,12 @@ function createWindow() {
   // Load the React app
   // In development, we load from the Vite dev server.
   // In production, we load the built HTML file.
-  if (isDev) {
+  if (app.isPackaged) {
+    win.loadFile(path.join(__dirname, 'renderer', 'dist', 'index.html'));
+  } else {
     win.loadURL('http://localhost:5173');
     // Open the DevTools.
     win.webContents.openDevTools();
-  } else {
-    win.loadFile(path.join(__dirname, 'renderer/dist/index.html'));
   }
 }
 
@@ -56,23 +62,20 @@ ipcMain.handle('add-book', async (event, book) => {
 });
 
 async function sendVerificationEmail(email, token) {
-  // Create a test account on ethereal.email
-  // In a real app, you'd use a real email service provider
-  let testAccount = await nodemailer.createTestAccount();
-  
+  // --- Production Email Configuration ---
+
   let transporter = nodemailer.createTransport({
-    host: 'smtp.ethereal.email',
-    port: 587,
-    secure: false, // true for 465, false for other ports
+    service: 'gmail', 
     auth: {
-      user: testAccount.user,
-      pass: testAccount.pass,
+      user: 'donaldmwanga33@gmail.com',
+      pass: 'qzdd cgnu sgmc gcan', 
     },
   });
 
   // send mail with defined transport object
   let info = await transporter.sendMail({
-    from: '"Library App" <dmakori@student.au.ac.ke>',
+    // It's best practice for the 'from' address to match your authenticated user.
+    from: '"Librico Library" <donaldmwanga33@gmail.com>', 
     to: email,
     subject: 'Verify Your Email',
     text: `Your verification token is: ${token}`,
@@ -80,7 +83,9 @@ async function sendVerificationEmail(email, token) {
   });
 
   console.log('Message sent: %s', info.messageId);
-  console.log('Preview URL: %s', nodemailer.getTestMessageUrl(info));
+  // The "Preview URL" is only for Ethereal. For real services, the email is sent directly.
+  // You can remove or comment out the line below.
+  // console.log('Preview URL: %s', nodemailer.getTestMessageUrl(info));
 }
 
 async function createVerificationToken(userId, email) {
@@ -130,7 +135,7 @@ ipcMain.handle('login-user', async (event, { email, password }) => {
       return { success: false, message: 'Invalid email or password.' };
     }
 
-    return { success: true, user: { id: user.id, username: user.username } };
+    return { success: true, user: { id: user.id, username: user.username, is_admin: user.is_admin } };
   } catch (error) {
     console.error('Login error:', error);
     return { success: false, message: 'An error occurred during login.' };
@@ -176,6 +181,51 @@ ipcMain.handle('resend-verification', async (event, { email }) => {
   } catch (error) {
     console.error('Resend verification error:', error);
     return { success: false, message: 'An error occurred while resending the verification email.' };
+  }
+});
+
+// === Admin Panel IPC Handlers ===
+
+// Get all librarians
+ipcMain.handle('get-all-librarians', async () => {
+  try {
+    // Select only non-sensitive data
+    const librarians = await db('users').select('id', 'username', 'email', 'is_admin');
+    return { success: true, librarians };
+  } catch (error) {
+    console.error('Error fetching librarians:', error);
+    return { success: false, message: 'Failed to fetch librarians.' };
+  }
+});
+
+// Add a new librarian (admin action)
+ipcMain.handle('admin-add-librarian', async (event, { username, email, password, is_admin }) => {
+  try {
+    const existingUser = await db('users').where({ email }).first();
+    if (existingUser) {
+      return { success: false, message: 'An account with this email already exists.' };
+    }
+    const hashedPassword = await bcrypt.hash(password, 10);
+    await db('users').insert({ username, email, password: hashedPassword, is_admin, is_email_verified: true });
+    return { success: true };
+  } catch (error) {
+    console.error('Admin add librarian error:', error);
+    return { success: false, message: 'Failed to add librarian.' };
+  }
+});
+
+// Remove a librarian (admin action)
+ipcMain.handle('admin-remove-librarian', async (event, { id }) => {
+  try {
+    // As a safeguard, prevent the default admin (ID 1) from being deleted.
+    if (id === 1) {
+      return { success: false, message: 'Cannot remove the default admin account.' };
+    }
+    await db('users').where({ id }).del();
+    return { success: true };
+  } catch (error) {
+    console.error('Admin remove librarian error:', error);
+    return { success: false, message: 'Failed to remove librarian.' };
   }
 });
 

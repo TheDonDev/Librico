@@ -11,4 +11,8 @@ contextBridge.exposeInMainWorld('api', {
   loginUser: (credentials) => ipcRenderer.invoke('login-user', credentials),
   verifyEmail: (data) => ipcRenderer.invoke('verify-email', data),
   resendVerification: (data) => ipcRenderer.invoke('resend-verification', data),
+  // Admin APIs
+  getAllLibrarians: () => ipcRenderer.invoke('get-all-librarians'),
+  adminAddLibrarian: (librarian) => ipcRenderer.invoke('admin-add-librarian', librarian),
+  adminRemoveLibrarian: (id) => ipcRenderer.invoke('admin-remove-librarian', id),
 });

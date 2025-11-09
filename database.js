@@ -1,13 +1,19 @@
 // database.js
 const path = require('path');
+const { app } = require('electron'); // app is not available until 'ready', so we need to be careful.
+const bcrypt = require('bcrypt');
+
+// In production, the database is copied to the resources directory, outside of the asar archive.
+// In development, it's in the project root.
+const dbPath = app.isPackaged
+  ? path.join(process.resourcesPath, 'library.sqlite')
+  : path.join(__dirname, 'library.sqlite');
 
 // Initialize knex.
 const knex = require('knex')({
   client: 'sqlite3',
   connection: {
-    // Store the database in the app's user data directory.
-    // This is the recommended location for app data.
-    filename: path.join(__dirname, 'library.sqlite'),
+    filename: dbPath,
   },
   useNullAsDefault: true, // Recommended for SQLite
 });
@@ -47,9 +53,26 @@ async function setupDatabase() {
       table.increments('id').primary();
       table.string('username').notNullable();
       table.string('email').notNullable().unique();
-      table.boolean('is_email_verified').notNullable().defaultTo(false);
       table.string('password').notNullable();
+      table.boolean('is_email_verified').notNullable().defaultTo(false);
+      table.boolean('is_admin').notNullable().defaultTo(false);
     });
+
+    // Create a default admin user on first run
+    console.log('Creating default admin user...');
+    const adminPassword = 'admin';
+    const hashedPassword = await bcrypt.hash(adminPassword, 10);
+    await knex('users').insert({
+      username: 'admin',
+      email: 'admin@librico.com',
+      password: hashedPassword,
+      is_email_verified: true, // Admin is verified by default
+      is_admin: true,
+    });
+    console.log('***********************************************************');
+    console.log('Default admin user created. Email: admin@librico.com, Password: admin');
+    console.log('Please change this password after your first login.');
+    console.log('***********************************************************');
   } else {
     // If table exists, check for the 'email' column
     const emailColumnExists = await knex.schema.hasColumn('users', 'email');
@@ -65,6 +88,13 @@ async function setupDatabase() {
         await knex.schema.alterTable('users', (table) => {
             table.boolean('is_email_verified').notNullable().defaultTo(false);
         });
+    }
+    const adminColumnExists = await knex.schema.hasColumn('users', 'is_admin');
+    if (!adminColumnExists) {
+      console.log('Altering "users" table to add "is_admin" column...');
+      await knex.schema.alterTable('users', (table) => {
+        table.boolean('is_admin').notNullable().defaultTo(false);
+      });
     }
   }
 

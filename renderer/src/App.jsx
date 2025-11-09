@@ -136,12 +136,120 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn }) {
   );
 }
 
+function AdminPanel() {
+  const [librarians, setLibrarians] = useState([]);
+  const [newUsername, setNewUsername] = useState('');
+  const [newEmail, setNewEmail] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [isNewAdmin, setIsNewAdmin] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  const { api } = window;
+
+  const fetchLibrarians = async () => {
+    const result = await api.getAllLibrarians();
+    if (result.success) {
+      setLibrarians(result.librarians);
+    } else {
+      setError(result.message || 'Failed to fetch librarians.');
+    }
+  };
+
+  useEffect(() => {
+    fetchLibrarians();
+  }, []);
+
+  const clearMessages = () => {
+    setError('');
+    setSuccess('');
+  };
+
+  const handleAddLibrarian = async (e) => {
+    e.preventDefault();
+    clearMessages();
+    if (!newUsername || !newEmail || !newPassword) {
+      setError('Please fill all fields to add a librarian.');
+      return;
+    }
+    const result = await api.adminAddLibrarian({
+      username: newUsername,
+      email: newEmail,
+      password: newPassword,
+      is_admin: isNewAdmin,
+    });
+
+    if (result.success) {
+      setSuccess('Librarian added successfully!');
+      setNewUsername('');
+      setNewEmail('');
+      setNewPassword('');
+      setIsNewAdmin(false);
+      fetchLibrarians(); // Refresh the list
+    } else {
+      setError(result.message || 'Failed to add librarian.');
+    }
+  };
+
+  const handleRemoveLibrarian = async (librarianId) => {
+    clearMessages();
+    if (!window.confirm('Are you sure you want to remove this librarian? This action cannot be undone.')) {
+      return;
+    }
+    const result = await api.adminRemoveLibrarian({ id: librarianId });
+    if (result.success) {
+      setSuccess('Librarian removed successfully!');
+      fetchLibrarians(); // Refresh the list
+    } else {
+      setError(result.message || 'Failed to remove librarian.');
+    }
+  };
+
+  return (
+    <div className="admin-panel">
+      <h2>Manage Librarians</h2>
+      {error && <p className="auth-error">{error}</p>}
+      {success && <p className="auth-success">{success}</p>}
+
+      <div className="librarian-list">
+        <h3>Current Librarians</h3>
+        {librarians.map((lib) => (
+          <div key={lib.id} className="book-item">
+            <p>
+              <strong>{lib.username}</strong> ({lib.email})
+              {lib.is_admin && <span className="admin-badge">Admin</span>}
+            </p>
+            <button onClick={() => handleRemoveLibrarian(lib.id)} className="remove-btn">Remove</button>
+          </div>
+        ))}
+      </div>
+
+      <hr />
+
+      <div className="add-librarian-form">
+        <h3>Add New Librarian</h3>
+        <form onSubmit={handleAddLibrarian} className="book-form">
+          <input type="text" placeholder="Username" value={newUsername} onChange={(e) => setNewUsername(e.target.value)} required />
+          <input type="email" placeholder="Email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} required />
+          <input type="password" placeholder="Password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required />
+          <div className="checkbox-group">
+            <input type="checkbox" id="is_admin" checked={isNewAdmin} onChange={(e) => setIsNewAdmin(e.target.checked)} />
+            <label htmlFor="is_admin">Make this user an admin</label>
+          </div>
+          <button type="submit">Add Librarian</button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function MainScreen({ user, onLogout }) {
   const [books, setBooks] = useState([]);
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
   const [copies, setCopies] = useState(1);
   const [selectedBook, setSelectedBook] = useState(null);
+  const [activeTab, setActiveTab] = useState('books'); // 'books' or 'admin'
 
   // The 'api' object is available globally
   const { api } = window;
@@ -216,60 +324,73 @@ function MainScreen({ user, onLogout }) {
   return (
     <div className="container">
       <div className="main-header">
-        <h1>Library Book Manager</h1>
+        <h1>Librico Dashboard</h1>
         <button onClick={onLogout} className="logout-btn">Logout</button>
       </div>
 
-      <form onSubmit={handleSubmit} className="book-form">
-        <input
-          type="text"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Book Title"
-          required
-        />
-        <input
-          type="text"
-          value={author}
-          onChange={(e) => setAuthor(e.target.value)}
-          placeholder="Author"
-          required
-        />
-        <input
-          type="number"
-          value={copies}
-          onChange={(e) => setCopies(e.target.value)}
-          placeholder="Copies"
-          min="1"
-          required
-        />
-        <button type="submit">Add Book</button>
-      </form>
-
-      <h2>Available Books</h2>
-      <div className="book-list">
-        {books.length > 0 ? (
-          books.map((book) => (
-            <div key={book.id} className="book-item" onClick={() => setSelectedBook(book)}>
-              <p>
-                <strong>{book.title}</strong> by {book.author}
-              </p>
-              <span>
-                Available: {book.copies_available} / {book.total_copies}
-              </span>
-            </div>
-          ))
-        ) : (
-          <p>No books in the library yet. Add one above!</p>
+      <div className="tabs">
+        <button onClick={() => setActiveTab('books')} className={activeTab === 'books' ? 'active' : ''}>Book Manager</button>
+        {user.is_admin && (
+          <button onClick={() => setActiveTab('admin')} className={activeTab === 'admin' ? 'active' : ''}>Admin Panel</button>
         )}
       </div>
 
-      <BookDetailModal
-        book={selectedBook}
-        onClose={() => setSelectedBook(null)}
-        onBorrow={handleBorrow}
-        onReturn={handleReturn}
-      />
+      {activeTab === 'books' && (
+        <div>
+          <form onSubmit={handleSubmit} className="book-form">
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Book Title"
+              required
+            />
+            <input
+              type="text"
+              value={author}
+              onChange={(e) => setAuthor(e.target.value)}
+              placeholder="Author"
+              required
+            />
+            <input
+              type="number"
+              value={copies}
+              onChange={(e) => setCopies(e.target.value)}
+              placeholder="Copies"
+              min="1"
+              required
+            />
+            <button type="submit">Add Book</button>
+          </form>
+
+          <h2>Available Books</h2>
+          <div className="book-list">
+            {books.length > 0 ? (
+              books.map((book) => (
+                <div key={book.id} className="book-item" onClick={() => setSelectedBook(book)}>
+                  <p>
+                    <strong>{book.title}</strong> by {book.author}
+                  </p>
+                  <span>
+                    Available: {book.copies_available} / {book.total_copies}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <p>No books in the library yet. Add one above!</p>
+            )}
+          </div>
+
+          <BookDetailModal
+            book={selectedBook}
+            onClose={() => setSelectedBook(null)}
+            onBorrow={handleBorrow}
+            onReturn={handleReturn}
+          />
+        </div>
+      )}
+
+      {activeTab === 'admin' && user.is_admin && <AdminPanel />}
     </div>
   );
 }
@@ -496,6 +617,7 @@ function VerifyEmailScreen({ onNavigate, initialEmail }) {
         <hr />
         <p>Didn't receive an email?</p>
         <input type="email" placeholder="Enter your email to resend" value={emailForResend} onChange={(e) => setEmailForResend(e.target.value)} required />
+        <button className="link-btn" onClick={() => onNavigate('login')}>Back to Login</button>
         <button onClick={handleResend} className="link-btn">Resend verification email</button>
       </div>
     </div>
