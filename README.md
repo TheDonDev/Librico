@@ -79,10 +79,11 @@ npm run package
 
 ## License
 
-This project is licensed under the ISC License. See the `LICENSE` file for details.
+The source code for this project is licensed under the ISC License, which you can find in the `LICENSE` file.
+
+Please note that while the code is open-source, a commercial license is required for institutional or business use. For details on commercial licensing, support plans, and custom feature development, please contact us.
 
 ---
 
 > GitHub @TheDonDev &nbsp;&middot;&nbsp;
 > Email donaldmwanga33@gmail.com
-

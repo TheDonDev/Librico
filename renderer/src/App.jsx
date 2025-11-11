@@ -114,7 +114,7 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn }) {
         {/* Borrowed List */}
         <div className="borrowed-list-section">
           <h3>Borrowed By</h3>
-          {book.borrowed_records && book.borrowed_records.length > 0 ? (
+          {(book.borrowed_records || []).length > 0 ? (
             <ul>
               {book.borrowed_records.map(record => (
                 <li key={record.id}>
@@ -257,12 +257,7 @@ function MainScreen({ user, onLogout }) {
   useEffect(() => {
     // Fetch books when the component mounts
     api.getBooks().then((fetchedBooks) => {
-      // Mock the borrowed_records for demonstration
-      const booksWithMockedBorrows = fetchedBooks.map(b => ({
-        ...b,
-        borrowed_records: [],
-      }));
-      setBooks(booksWithMockedBorrows);
+      setBooks(fetchedBooks);
     });
   }, [api]);
   
@@ -291,7 +286,7 @@ function MainScreen({ user, onLogout }) {
           return {
             ...book,
             copies_available: book.copies_available - 1,
-            borrowed_records: [...book.borrowed_records, newRecord],
+            borrowed_records: [...(book.borrowed_records || []), newRecord],
           };
         }
         return book;

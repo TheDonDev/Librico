@@ -89,7 +89,9 @@ async function sendVerificationEmail(email, token) {
 }
 
 async function createVerificationToken(userId, email) {
-  const token = crypto.randomBytes(32).toString('hex');
+  // Generate a 6-digit numeric token that is easier for users to enter manually.
+  // crypto.randomInt is a secure way to generate random numbers.
+  const token = crypto.randomInt(100000, 999999).toString();
   const expires_at = new Date(Date.now() + 3600 * 1000); // 1 hour expiry
 
   await db('email_verifications').insert({
@@ -110,7 +112,7 @@ ipcMain.handle('register-user', async (event, { username, email, password }) => 
     }
     const hashedPassword = await bcrypt.hash(password, 10); // Hash password with salt round 10
     const [userId] = await db('users').insert({ username, email, password: hashedPassword }).returning('id');
-    await createVerificationToken(userId, email);
+    await createVerificationToken(userId.id, email);
     return { success: true, message: 'User registered successfully.' };
   } catch (error) {
     console.error('Registration error:', error);
