@@ -16,6 +16,9 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
+    minWidth: 900,
+    minHeight: 600,
+    autoHideMenuBar: true,
     // The icon path for the window.
     // In production, it's in the resources folder. In dev, it's in the root.
     icon: path.join(__dirname, app.isPackaged ? '../resources/icon.ico' : 'build/icon.ico'),
@@ -46,7 +49,26 @@ function createWindow() {
 // Example: Get all books
 ipcMain.handle('get-books', async () => {
   const books = await db('books').select('*');
-  return books;
+  
+  // Fetch active borrowed records
+  const borrowedRecords = await db('borrowed_records').where('returned', false).select('*');
+  
+  // Map records to books
+  const booksWithRecords = books.map(book => {
+    const records = borrowedRecords
+      .filter(r => r.book_id == book.id)
+      .map(r => ({
+        id: r.id,
+        studentName: r.student_name,
+        studentForm: r.student_form,
+        admissionNumber: r.admission_number,
+        borrowedDate: r.borrowed_date,
+        dueDate: r.due_date
+      }));
+    return { ...book, borrowed_records: records };
+  });
+
+  return booksWithRecords;
 });
 
 // Example: Add a book
@@ -57,8 +79,47 @@ ipcMain.handle('add-book', async (event, book) => {
     total_copies: book.copies,
     copies_available: book.copies,
   };
-  const [id] = await db('books').insert(bookToInsert).returning('id');
-  return { ...bookToInsert, id };
+  // Handle SQLite insert return which is typically [id]
+  const [result] = await db('books').insert(bookToInsert);
+  const id = (typeof result === 'object' && result !== null) ? result.id : result;
+  return { ...bookToInsert, id: Number(id) };
+});
+
+// Borrow a book
+ipcMain.handle('borrow-book', async (event, { bookId, borrowDetails }) => {
+  try {
+    const safeBookId = Number(bookId);
+    await db.transaction(async trx => {
+      await trx('books').where('id', safeBookId).decrement('copies_available', 1);
+      await trx('borrowed_records').insert({
+        book_id: safeBookId,
+        student_name: borrowDetails.studentName,
+        student_form: borrowDetails.studentForm,
+        admission_number: borrowDetails.admissionNumber,
+        borrowed_date: borrowDetails.borrowedDate,
+        due_date: borrowDetails.dueDate,
+        returned: false
+      });
+    });
+    return { success: true };
+  } catch (error) {
+    console.error('Borrow book error:', error);
+    return { success: false, message: 'Failed to borrow book.' };
+  }
+});
+
+// Return a book
+ipcMain.handle('return-book', async (event, { bookId, recordId }) => {
+  try {
+    await db.transaction(async trx => {
+      await trx('books').where('id', bookId).increment('copies_available', 1);
+      await trx('borrowed_records').where('id', recordId).update({ returned: true });
+    });
+    return { success: true };
+  } catch (error) {
+    console.error('Return book error:', error);
+    return { success: false, message: 'Failed to return book.' };
+  }
 });
 
 async function sendVerificationEmail(email, token) {
@@ -231,8 +292,30 @@ ipcMain.handle('admin-remove-librarian', async (event, { id }) => {
   }
 });
 
+// Ensure borrowed_records table exists
+async function ensureBorrowedRecordsTable() {
+  try {
+    const exists = await db.schema.hasTable('borrowed_records');
+    if (!exists) {
+      await db.schema.createTable('borrowed_records', (table) => {
+        table.increments('id');
+        table.integer('book_id').unsigned().references('id').inTable('books');
+        table.string('student_name');
+        table.string('student_form');
+        table.string('admission_number');
+        table.string('borrowed_date');
+        table.string('due_date');
+        table.boolean('returned').defaultTo(false);
+      });
+    }
+  } catch (err) {
+    console.error("Error checking/creating borrowed_records table:", err);
+  }
+}
+
 // This method will be called when Electron has finished initialization
 app.whenReady().then(() => {
+  ensureBorrowedRecordsTable();
   createWindow();
 
   app.on('activate', () => {

@@ -15,4 +15,6 @@ contextBridge.exposeInMainWorld('api', {
   getAllLibrarians: () => ipcRenderer.invoke('get-all-librarians'),
   adminAddLibrarian: (librarian) => ipcRenderer.invoke('admin-add-librarian', librarian),
   adminRemoveLibrarian: (id) => ipcRenderer.invoke('admin-remove-librarian', id),
+  borrowBook: (data) => ipcRenderer.invoke('borrow-book', data),
+  returnBook: (data) => ipcRenderer.invoke('return-book', data),
 });

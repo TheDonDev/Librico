@@ -1,10 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import './App.css';
-import libraryBackground1 from '/src/assets/images/BackScreenshot1.png';
-import libraryBackground2 from '/src/assets/images/BackScreenshot2.png';
-import libraryBackground3 from '/src/assets/images/BackScreenshot3.png';
-import libraryBackground4 from '/src/assets/images/BackScreenshot4.png';
-import libraryBackground5 from '/src/assets/images/BackScreenshot5.png';
+import libraryBackground1 from './assets/images/BackScreenshot1.png';
+import libraryBackground2 from './assets/images/BackScreenshot2.png';
+import libraryBackground3 from './assets/images/BackScreenshot3.png';
+import libraryBackground4 from './assets/images/BackScreenshot4.png';
+import libraryBackground5 from './assets/images/BackScreenshot5.png';
 
 const backgroundImages = [
   libraryBackground1,
@@ -20,6 +20,7 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn }) {
   const [admissionNumber, setAdmissionNumber] = useState('');
   const [borrowedDate, setBorrowedDate] = useState('');
   const [dueDate, setDueDate] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Helper to format a Date object into a string suitable for datetime-local input
   const toDateTimeLocal = (date) => {
@@ -41,20 +42,30 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn }) {
 
   if (!book) return null;
 
-  const handleBorrowSubmit = (e) => {
+  const handleBorrowSubmit = async (e) => {
     e.preventDefault();
-    if (!studentName || !admissionNumber) {
-      alert('Please fill in all student details.');
+    if (isSubmitting) return;
+    if (!studentName || !admissionNumber || !borrowedDate || !dueDate) {
+      alert('Please fill in all student details and dates.');
       return;
     }
 
-    const borrowDetails = {
-      studentName,
-      studentForm,
-      admissionNumber,
-      borrowedDate: new Date(borrowedDate).toISOString(),
-      dueDate: new Date(dueDate).toISOString(),    };
-    onBorrow(book.id, borrowDetails);
+    setIsSubmitting(true);
+    try {
+      const borrowDetails = {
+        studentName,
+        studentForm,
+        admissionNumber,
+        borrowedDate: new Date(borrowedDate).toISOString(),
+        dueDate: new Date(dueDate).toISOString(),
+      };
+      await onBorrow(book.id, borrowDetails);
+    } catch (error) {
+      console.error("Error processing borrow details:", error);
+      alert("An error occurred while borrowing the book. Please check the details.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -106,7 +117,7 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn }) {
                 min={borrowedDate}
                 required
               />
-              <button type="submit">Borrow Book</button>
+              <button type="submit" disabled={isSubmitting}>{isSubmitting ? 'Processing...' : 'Borrow Book'}</button>
             </form>
           </div>
         )}
@@ -123,7 +134,11 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn }) {
                     <br />
                     <small>Due: {new Date(record.dueDate).toLocaleString()}</small>
                   </span>
-                  <button onClick={() => onReturn(book.id, record.id)}>Return</button>
+                  <button onClick={() => {
+                    if (window.confirm('Are you sure you want to return this book?')) {
+                      onReturn(book.id, record.id);
+                    }
+                  }}>Return</button>
                 </li>
               ))}
             </ul>
@@ -249,7 +264,9 @@ function MainScreen({ user, onLogout }) {
   const [author, setAuthor] = useState('');
   const [copies, setCopies] = useState(1);
   const [selectedBook, setSelectedBook] = useState(null);
-  const [activeTab, setActiveTab] = useState('books'); // 'books' or 'admin'
+  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'inventory', 'admin'
+  const [searchTerm, setSearchTerm] = useState('');
+  const [availabilityFilter, setAvailabilityFilter] = useState('all'); // 'all', 'available', 'borrowed'
 
   // The 'api' object is available globally
   const { api } = window;
@@ -272,49 +289,70 @@ function MainScreen({ user, onLogout }) {
     setTitle('');
     setAuthor('');
     setCopies(1);
-  };
+    api.getBooks().then((fetchedBooks) => {
+      setBooks(fetchedBooks);
+    });
+ };
 
   const handleBorrow = async (bookId, borrowDetails) => {
-    // This would also update the backend.
-    // const updatedBook = await api.borrowBook(bookId, borrowDetails);
-
-    // For now, we'll simulate the update on the frontend.
-    setBooks(currentBooks =>
-      currentBooks.map(book => {
-        if (book.id === bookId) {
-          const newRecord = { ...borrowDetails, id: Date.now() }; // Use timestamp as a mock ID
-          return {
-            ...book,
-            copies_available: book.copies_available - 1,
-            borrowed_records: [...(book.borrowed_records || []), newRecord],
-          };
+    try {
+       if (bookId == null || borrowDetails == null) {
+          console.error("Invalid bookId or borrowDetails:", bookId, borrowDetails);
+          alert("Failed to borrow book: Invalid book details.");
+          return;
         }
-        return book;
-      })
-    );
-    setSelectedBook(null); // Close modal on success
-    alert('Book borrowed successfully!');
+       if (typeof bookId !== 'number') {
+            console.error("bookId is not a number:", bookId);
+            return;
+        }
+      const result = await api.borrowBook({ bookId, borrowDetails });
+      if (result.success) {
+        // Refresh books from backend to ensure consistency
+        const fetchedBooks = await api.getBooks();
+        setBooks(fetchedBooks);
+        setSelectedBook(null); // Close modal on success
+        alert('Book borrowed successfully!');
+      } else {
+        alert('Failed to borrow book: ' + (result.message || 'Unknown error'));
+      }
+    } catch (error) {
+      console.error("Borrow operation failed:", error);
+      alert("An unexpected error occurred while borrowing the book.");
+    }
   };
 
   const handleReturn = async (bookId, recordId) => {
-    // This would also update the backend.
-    // const updatedBook = await api.returnBook(recordId);
-
-    // Simulate the update on the frontend.
-    setBooks(currentBooks =>
-      currentBooks.map(book => {
-        if (book.id === bookId) {
-          return {
-            ...book,
-            copies_available: book.copies_available + 1,
-            borrowed_records: book.borrowed_records.filter(r => r.id !== recordId),
-          };
-        }
-        return book;
-      })
-    );
-    setSelectedBook(null); // Close modal on success
+    const result = await api.returnBook({ bookId, recordId });
+    if (result.success) {
+      // Refresh books from backend to ensure consistency
+      const fetchedBooks = await api.getBooks();
+      setBooks(fetchedBooks);
+      setSelectedBook(null); // Close modal on success
+    } else {
+      alert('Failed to return book: ' + (result.message || 'Unknown error'));
+    }
   };
+
+  const getFilteredBooks = () => {
+    let filtered = books;
+    if (availabilityFilter === 'available') {
+      filtered = filtered.filter(book => book.copies_available > 0);
+    } else if (availabilityFilter === 'borrowed') {
+      filtered = filtered.filter(book => book.total_copies - book.copies_available > 0);
+    }
+
+    return filtered.filter(book =>
+      book.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      book.author.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  };
+
+  const filteredBooks = books.filter(book =>
+    book.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    book.author.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const displayedBooks = getFilteredBooks();
 
   return (
     <div className="container">
@@ -324,14 +362,32 @@ function MainScreen({ user, onLogout }) {
       </div>
 
       <div className="tabs">
-        <button onClick={() => setActiveTab('books')} className={activeTab === 'books' ? 'active' : ''}>Book Manager</button>
+        <button onClick={() => setActiveTab('dashboard')} className={activeTab === 'dashboard' ? 'active' : ''}>Dashboard</button>
+        <button onClick={() => setActiveTab('inventory')} className={activeTab === 'inventory' ? 'active' : ''}>Inventory</button>
         {user.is_admin && (
           <button onClick={() => setActiveTab('admin')} className={activeTab === 'admin' ? 'active' : ''}>Admin Panel</button>
         )}
       </div>
 
-      {activeTab === 'books' && (
-        <div>
+      {activeTab === 'dashboard' && (
+        <div className="dashboard-view">
+          <div className="stats-container">
+            <div className="stat-card">
+              <h3>Total Books</h3>
+              <p>{books.reduce((acc, b) => acc + b.total_copies, 0)}</p>
+            </div>
+            <div className="stat-card">
+              <h3>Available</h3>
+              <p>{books.reduce((acc, b) => acc + b.copies_available, 0)}</p>
+            </div>
+            <div className="stat-card">
+              <h3>Borrowed</h3>
+              <p>{books.reduce((acc, b) => acc + (b.total_copies - b.copies_available), 0)}</p>
+            </div>
+          </div>
+
+          <div className="section-card">
+            <h3>Add New Book</h3>
           <form onSubmit={handleSubmit} className="book-form">
             <input
               type="text"
@@ -357,33 +413,61 @@ function MainScreen({ user, onLogout }) {
             />
             <button type="submit">Add Book</button>
           </form>
+          </div>
 
-          <h2>Available Books</h2>
-          <div className="book-list">
-            {books.length > 0 ? (
-              books.map((book) => (
-                <div key={book.id} className="book-item" onClick={() => setSelectedBook(book)}>
-                  <p>
-                    <strong>{book.title}</strong> by {book.author}
-                  </p>
-                  <span>
-                    Available: {book.copies_available} / {book.total_copies}
-                  </span>
+          <div className="dashboard-actions">
+            <button className="primary large-btn" onClick={() => setActiveTab('inventory')}>
+              View All Available Books
+            </button>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'inventory' && (
+        <div className="inventory-view">
+          <div className="inventory-header">
+            <h2>Available Books</h2>
+            <input
+              type="text"
+              placeholder="Search by title or author..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="search-bar"
+            />
+              <select
+                value={availabilityFilter}
+                onChange={(e) => setAvailabilityFilter(e.target.value)}
+                className="availability-filter"
+              >
+                <option value="all">All Books</option>
+                <option value="available">Available Books</option>
+              </select>
+          </div>
+          <div className="book-grid">
+            {filteredBooks.length > 0 ? (
+              filteredBooks.map((book) => (
+                <div key={book.id} className="book-card" onClick={() => setSelectedBook(book)}>
+                  <div className="book-icon">📖</div>
+                  <h3>{book.title}</h3>
+                  <p className="book-author">by {book.author}</p>
+                  <div className={`status-badge ${book.copies_available > 0 ? 'available' : 'out'}`}>
+                    {book.copies_available > 0 ? `${book.copies_available} Available` : 'Out of Stock'}
+                  </div>
                 </div>
               ))
             ) : (
-              <p>No books in the library yet. Add one above!</p>
+              <p className="no-results">No books found matching your search.</p>
             )}
           </div>
-
-          <BookDetailModal
-            book={selectedBook}
-            onClose={() => setSelectedBook(null)}
-            onBorrow={handleBorrow}
-            onReturn={handleReturn}
-          />
         </div>
       )}
+
+      <BookDetailModal
+        book={selectedBook}
+        onClose={() => setSelectedBook(null)}
+        onBorrow={handleBorrow}
+        onReturn={handleReturn}
+      />
 
       {activeTab === 'admin' && user.is_admin && <AdminPanel />}
     </div>
@@ -438,44 +522,54 @@ function LoginScreen({ onLoginSuccess, onNavigate }) {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
+  const emailRef = useRef(null);
   const { api } = window;
 
   const handleLogin = async (e) => {
     e.preventDefault();
-    if (error) setError('');
     setError('');
     const result = await api.loginUser({ email, password });
     if (result.success) {
       onLoginSuccess(result.user);
     } else {
       setError(result.message);
-    }
-    if (result.needsVerification) {
-      // Navigate to verification screen, passing the email along
-      onNavigate('verify', { email });
+      if (result.needsVerification) {
+        // Navigate to verification screen, passing the email along
+        onNavigate('verify', { email });
+      }
     }
   };
 
+  useEffect(() => {
+    if (emailRef.current) {
+      emailRef.current.focus();
+    }
+  }, []);
+
   return (
     <div className="auth-container">
-      <div className="auth-form">
+      <form onSubmit={handleLogin}>
         <h2>Librarian Login</h2>
-        <form onSubmit={handleLogin}>
+        {error && <p className="auth-error">{error}</p>}
+        <div className="form-group">
+          <label htmlFor="email">Email Address</label>
+          <input
+            ref={emailRef}
+            id="email"
+            type="email"
+            placeholder="librarian@librico.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+        </div>
+        <div className="form-group">
+          <label htmlFor="password">Password</label>
           <div className="input-group">
-            <i className="input-icon">📧</i>
             <input
-              type="email"
-              placeholder="Email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
-          </div>
-          <div className="input-group">
-            <i className="input-icon">🔒</i>
-            <input
+              id="password"
               type={showPassword ? "text" : "password"}
-              placeholder="Password"
+              placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
@@ -484,14 +578,15 @@ function LoginScreen({ onLoginSuccess, onNavigate }) {
               {showPassword ? <EyeSlashIcon /> : <EyeIcon />}
             </button>
           </div>
-          {error && <p className="auth-error">{error}</p>}
-          <button type="submit">Login</button>
-        </form>
+        </div>
+        <div className="actions">
+          <button type="submit" className="primary">Login</button>
+          <button type="button" className="secondary" onClick={() => onNavigate('register')}>Need an account?</button>
+        </div>
         <div className="auth-footer">
-          <button className="link-btn" onClick={() => onNavigate('register')}>Need an account? Register</button>
           <button className="link-btn" onClick={() => onNavigate('welcome')}>Back to Welcome</button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }
@@ -503,6 +598,7 @@ function RegisterScreen({ onNavigate, setInitialEmailForVerification }) {
   const [showPassword, setShowPassword] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const usernameRef = useRef(null);
   const { api } = window;
 
   const handleRegister = async (e) => {
@@ -522,39 +618,63 @@ function RegisterScreen({ onNavigate, setInitialEmailForVerification }) {
     }
   };
 
+  useEffect(() => {
+    if (usernameRef.current) {
+      usernameRef.current.focus();
+    }
+  }, []);
+
   return (
     <div className="auth-container">
-      <div className="auth-form">
+      <form onSubmit={handleRegister}>
         <h2>Register New Librarian</h2>
-        <form onSubmit={handleRegister}>
+        <div className="form-group">
+          <label htmlFor="username">Username</label>
+          <input
+            ref={usernameRef}
+            id="username"
+            type="text"
+            placeholder="Username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+          />
+        </div>
+        <div className="form-group">
+          <label htmlFor="email">Email Address</label>
+          <input
+            id="email"
+            type="email"
+            placeholder="Email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+        </div>
+        <div className="form-group">
+          <label htmlFor="password">Password</label>
           <div className="input-group">
-            <i className="input-icon">👤</i>
-            <input type="text" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} required />
-          </div>
-          <div className="input-group">
-            <i className="input-icon">📧</i>
-            <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-          </div>
-          <div className="input-group">
-            <i className="input-icon">🔒</i>
             <input
+              id="password"
               type={showPassword ? 'text' : 'password'}
-              placeholder="Password"
+              placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)} required />
             <button type="button" onClick={() => setShowPassword(!showPassword)} className="password-toggle-btn">
               {showPassword ? <EyeSlashIcon /> : <EyeIcon />}
             </button>
           </div>
-          {error && <p className="auth-error">{error}</p>}
-          {message && <p className="auth-success">{message}</p>}
-          <button type="submit">Register</button>
-        </form>
+        </div>
+        {error && <p className="auth-error">{error}</p>}
+        {message && <p className="auth-success">{message}</p>}
+        <div className="actions">
+          <button type="submit" className="primary">Register</button>
+          <button type="button" className="secondary" onClick={() => onNavigate('login')}>Login</button>
+        </div>
         <div className="auth-footer">
-          <button className="link-btn" onClick={() => onNavigate('login')}>Already have an account? Login</button>
           <button className="link-btn" onClick={() => onNavigate('welcome')}>Back to Welcome</button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }
@@ -643,16 +763,16 @@ function App() {
 
   switch (view) { // 'welcome', 'login', 'register', 'verify', 'main'
     case 'login':
-      return <LoginScreen onLoginSuccess={handleLoginSuccess} onNavigate={handleNavigation} />;
+      return <LoginScreen key="login" onLoginSuccess={handleLoginSuccess} onNavigate={handleNavigation} />;
     case 'register':
-      return <RegisterScreen onNavigate={handleNavigation} setInitialEmailForVerification={setVerificationEmail} />;
+      return <RegisterScreen key="register" onNavigate={handleNavigation} setInitialEmailForVerification={setVerificationEmail} />;
     case 'verify':
-      return <VerifyEmailScreen onNavigate={handleNavigation} initialEmail={verificationEmail} />;
+      return <VerifyEmailScreen key="verify" onNavigate={handleNavigation} initialEmail={verificationEmail} />;
     case 'main':
-      return <MainScreen user={user} onLogout={handleLogout} />;
+      return <MainScreen key="main" user={user} onLogout={handleLogout} />;
     case 'welcome':
     default:
-      return <WelcomeScreen onNavigate={handleNavigation} />;
+      return <WelcomeScreen key="welcome" onNavigate={handleNavigation} />;
   }
 }
 
