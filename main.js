@@ -78,11 +78,39 @@ ipcMain.handle('add-book', async (event, book) => {
     author: book.author,
     total_copies: book.copies,
     copies_available: book.copies,
+    cover_image: book.coverImage,
   };
   // Handle SQLite insert return which is typically [id]
   const [result] = await db('books').insert(bookToInsert);
   const id = (typeof result === 'object' && result !== null) ? result.id : result;
   return { ...bookToInsert, id: Number(id) };
+});
+
+// Update a book
+ipcMain.handle('update-book', async (event, book) => {
+  try {
+    const { id, title, author, total_copies, cover_image } = book;
+    
+    await db.transaction(async trx => {
+      const currentBook = await trx('books').where({ id }).first();
+      if (!currentBook) throw new Error('Book not found');
+
+      const updates = { title, author, cover_image };
+      
+      if (total_copies !== undefined && total_copies !== currentBook.total_copies) {
+        const diff = total_copies - currentBook.total_copies;
+        updates.total_copies = total_copies;
+        updates.copies_available = currentBook.copies_available + diff;
+      }
+
+      await trx('books').where({ id }).update(updates);
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error('Update book error:', error);
+    return { success: false, message: 'Failed to update book.' };
+  }
 });
 
 // Borrow a book
@@ -122,6 +150,62 @@ ipcMain.handle('return-book', async (event, { bookId, recordId }) => {
   }
 });
 
+// Get most borrowed books
+ipcMain.handle('get-most-borrowed-books', async () => {
+  try {
+    const results = await db('borrowed_records')
+      .join('books', 'borrowed_records.book_id', 'books.id')
+      .select('books.title', 'books.author', 'books.cover_image')
+      .count('borrowed_records.book_id as count')
+      .groupBy('books.id')
+      .orderBy('count', 'desc')
+      .limit(5);
+    return { success: true, books: results };
+  } catch (error) {
+    console.error('Error fetching most borrowed books:', error);
+    return { success: false, message: 'Failed to fetch most borrowed books.' };
+  }
+});
+
+// Get borrowing trends
+ipcMain.handle('get-borrowing-trends', async () => {
+  try {
+    // Group by date (YYYY-MM-DD) and count
+    const results = await db('borrowed_records')
+      .select(db.raw('substr(borrowed_date, 1, 10) as date'), db.raw('count(*) as count'))
+      .groupBy('date')
+      .orderBy('date', 'desc')
+      .limit(7); // Last 7 active days
+    
+    // Reverse to show chronological order (oldest to newest)
+    return { success: true, trends: results.reverse() };
+  } catch (error) {
+    console.error('Error fetching borrowing trends:', error);
+    return { success: false, message: 'Failed to fetch trends.' };
+  }
+});
+
+// Get overdue books
+ipcMain.handle('get-overdue-books', async () => {
+  try {
+    const now = new Date().toISOString();
+    const overdueBooks = await db('borrowed_records')
+      .join('books', 'borrowed_records.book_id', 'books.id')
+      .where('borrowed_records.returned', false)
+      .andWhere('borrowed_records.due_date', '<', now)
+      .select(
+        'books.title',
+        'borrowed_records.student_name',
+        'borrowed_records.due_date',
+        'borrowed_records.id'
+      );
+    return { success: true, overdueBooks };
+  } catch (error) {
+    console.error('Error fetching overdue books:', error);
+    return { success: false, message: 'Failed to fetch overdue books.' };
+  }
+});
+
 async function sendVerificationEmail(email, token) {
   // --- Production Email Configuration ---
 
@@ -147,6 +231,24 @@ async function sendVerificationEmail(email, token) {
   // The "Preview URL" is only for Ethereal. For real services, the email is sent directly.
   // You can remove or comment out the line below.
   // console.log('Preview URL: %s', nodemailer.getTestMessageUrl(info));
+}
+
+async function sendPasswordResetEmail(email, token) {
+  let transporter = nodemailer.createTransport({
+    service: 'gmail', 
+    auth: {
+      user: 'donaldmwanga33@gmail.com',
+      pass: 'qzdd cgnu sgmc gcan', 
+    },
+  });
+
+  await transporter.sendMail({
+    from: '"Librico Library" <donaldmwanga33@gmail.com>', 
+    to: email,
+    subject: 'Password Reset Request',
+    text: `Your password reset token is: ${token}`,
+    html: `<b>Your password reset token is: ${token}</b><p>Enter this token in the app to reset your password.</p>`,
+  });
 }
 
 async function createVerificationToken(userId, email) {
@@ -247,6 +349,77 @@ ipcMain.handle('resend-verification', async (event, { email }) => {
   }
 });
 
+// Forgot Password - Send Token
+ipcMain.handle('forgot-password', async (event, { email }) => {
+  try {
+    const user = await db('users').where({ email }).first();
+    if (!user) {
+      // For security, we generally don't want to reveal if an email exists, 
+      // but for this internal app, a helpful message is fine.
+      return { success: true, message: 'If an account exists with this email, a reset token has been sent.' };
+    }
+
+    const token = crypto.randomInt(100000, 999999).toString();
+    const expires_at = new Date(Date.now() + 3600 * 1000); // 1 hour expiry
+
+    // Invalidate any existing reset tokens for this user
+    await db('password_resets').where({ user_id: user.id }).del();
+
+    await db('password_resets').insert({
+      user_id: user.id,
+      token,
+      expires_at,
+    });
+
+    await sendPasswordResetEmail(email, token);
+    return { success: true, message: 'Reset token sent to your email.' };
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    return { success: false, message: 'An error occurred while processing your request.' };
+  }
+});
+
+// Reset Password - Verify Token and Update Password
+ipcMain.handle('reset-password', async (event, { email, token, newPassword }) => {
+  try {
+    const user = await db('users').where({ email }).first();
+    if (!user) return { success: false, message: 'Invalid request.' };
+
+    const resetRecord = await db('password_resets').where({ user_id: user.id, token }).first();
+    if (!resetRecord) return { success: false, message: 'Invalid token.' };
+    if (new Date() > new Date(resetRecord.expires_at)) return { success: false, message: 'Token has expired.' };
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await db('users').where({ id: user.id }).update({ password: hashedPassword });
+    await db('password_resets').where({ id: resetRecord.id }).del();
+
+    return { success: true, message: 'Password reset successfully. You can now login.' };
+  } catch (error) {
+    console.error('Reset password error:', error);
+    return { success: false, message: 'An error occurred while resetting password.' };
+  }
+});
+
+// Update user profile
+ipcMain.handle('update-profile', async (event, { userId, username, password }) => {
+  try {
+    const updates = {};
+    if (username) updates.username = username;
+    if (password) {
+      updates.password = await bcrypt.hash(password, 10);
+    }
+    
+    if (Object.keys(updates).length > 0) {
+      await db('users').where('id', userId).update(updates);
+      return { success: true, message: 'Profile updated successfully.' };
+    }
+    return { success: true, message: 'No changes made.' };
+  } catch (error) {
+    console.error('Update profile error:', error);
+    return { success: false, message: 'Failed to update profile.' };
+  }
+});
+
 // === Admin Panel IPC Handlers ===
 
 // Get all librarians
@@ -313,9 +486,42 @@ async function ensureBorrowedRecordsTable() {
   }
 }
 
+// Ensure password_resets table exists
+async function ensurePasswordResetsTable() {
+  try {
+    const exists = await db.schema.hasTable('password_resets');
+    if (!exists) {
+      await db.schema.createTable('password_resets', (table) => {
+        table.increments('id');
+        table.integer('user_id').unsigned().references('id').inTable('users');
+        table.string('token');
+        table.dateTime('expires_at');
+      });
+    }
+  } catch (err) {
+    console.error("Error checking/creating password_resets table:", err);
+  }
+}
+
+// Ensure books table has cover_image column
+async function ensureBooksColumns() {
+  try {
+    const hasColumn = await db.schema.hasColumn('books', 'cover_image');
+    if (!hasColumn) {
+      await db.schema.table('books', (table) => {
+        table.text('cover_image');
+      });
+    }
+  } catch (err) {
+    console.error("Error checking/creating books columns:", err);
+  }
+}
+
 // This method will be called when Electron has finished initialization
 app.whenReady().then(() => {
   ensureBorrowedRecordsTable();
+  ensurePasswordResetsTable();
+  ensureBooksColumns();
   createWindow();
 
   app.on('activate', () => {

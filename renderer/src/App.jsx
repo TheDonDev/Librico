@@ -14,13 +14,18 @@ const backgroundImages = [
   libraryBackground5,
 ];
 
-function BookDetailModal({ book, onClose, onBorrow, onReturn }) {
+function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
   const [studentName, setStudentName] = useState('');
   const [studentForm, setStudentForm] = useState('1');
   const [admissionNumber, setAdmissionNumber] = useState('');
   const [borrowedDate, setBorrowedDate] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editAuthor, setEditAuthor] = useState('');
+  const [editCopies, setEditCopies] = useState(0);
+  const [editCoverImage, setEditCoverImage] = useState('');
 
   // Helper to format a Date object into a string suitable for datetime-local input
   const toDateTimeLocal = (date) => {
@@ -37,10 +42,48 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn }) {
 
       setBorrowedDate(toDateTimeLocal(now));
       setDueDate(toDateTimeLocal(twoWeeksFromNow));
+      
+      // Initialize edit fields
+      setEditTitle(book.title);
+      setEditAuthor(book.author);
+      setEditCopies(book.total_copies);
+      setEditCoverImage(book.cover_image || '');
     }
   }, [book]);
 
   if (!book) return null;
+
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setEditCoverImage(reader.result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleUpdateSubmit = async (e) => {
+    e.preventDefault();
+    if (isSubmitting) return;
+    
+    setIsSubmitting(true);
+    try {
+      await onUpdate({
+        id: book.id,
+        title: editTitle,
+        author: editAuthor,
+        total_copies: parseInt(editCopies, 10),
+        cover_image: editCoverImage
+      });
+      setIsEditing(false);
+    } catch (error) {
+      console.error("Error updating book:", error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const handleBorrowSubmit = async (e) => {
     e.preventDefault();
@@ -72,13 +115,55 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn }) {
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <button onClick={onClose} className="modal-close-btn">&times;</button>
-        <h2>{book.title}</h2>
-        <p>by {book.author}</p>
-        <p><strong>Available:</strong> {book.copies_available} / {book.total_copies}</p>
-        <hr />
+        
+        {!isEditing ? (
+          <>
+            <div className="modal-header-actions">
+              <h2>{book.title}</h2>
+              <button className="secondary small-btn" onClick={() => setIsEditing(true)}>Edit Details</button>
+            </div>
+            {book.cover_image && (
+              <img src={book.cover_image} alt={book.title} className="modal-book-cover" />
+            )}
+            <p>by {book.author}</p>
+            <p><strong>Available:</strong> {book.copies_available} / {book.total_copies}</p>
+            <hr />
+          </>
+        ) : (
+          <div className="edit-section">
+            <h3>Edit Book Details</h3>
+            <form onSubmit={handleUpdateSubmit} className="borrow-form">
+              <label>Title</label>
+              <input type="text" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} required />
+              
+              <label>Author</label>
+              <input type="text" value={editAuthor} onChange={(e) => setEditAuthor(e.target.value)} required />
+              
+              <label>Total Copies</label>
+              <input type="number" value={editCopies} onChange={(e) => setEditCopies(e.target.value)} min="1" required />
+              
+              <label>Cover Image</label>
+              <input type="file" accept="image/*" onChange={handleImageUpload} />
+              {editCoverImage && (
+                <div className="image-preview">
+                  <img src={editCoverImage} alt="Preview" style={{maxHeight: '100px'}} />
+                  <button type="button" className="secondary small-btn" onClick={() => setEditCoverImage('')}>Remove</button>
+                </div>
+              )}
+
+              <div className="actions">
+                <button type="submit" className="primary" disabled={isSubmitting}>
+                  {isSubmitting ? 'Saving...' : 'Save Changes'}
+                </button>
+                <button type="button" className="secondary" onClick={() => setIsEditing(false)}>Cancel</button>
+              </div>
+            </form>
+            <hr />
+          </div>
+        )}
 
         {/* Borrow Form */}
-        {book.copies_available > 0 && (
+        {!isEditing && book.copies_available > 0 && (
           <div className="borrow-section">
             <h3>Borrow a Copy</h3>
             <form onSubmit={handleBorrowSubmit} className="borrow-form">
@@ -123,6 +208,7 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn }) {
         )}
 
         {/* Borrowed List */}
+        {!isEditing && (
         <div className="borrowed-list-section">
           <h3>Borrowed By</h3>
           {(book.borrowed_records || []).length > 0 ? (
@@ -146,6 +232,7 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn }) {
             <p>No copies are currently borrowed.</p>
           )}
         </div>
+        )}
       </div>
     </div>
   );
@@ -258,15 +345,123 @@ function AdminPanel() {
   );
 }
 
-function MainScreen({ user, onLogout }) {
+function ProfileSettings({ user, onUpdate }) {
+  const [username, setUsername] = useState(user.username);
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const { api } = window;
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setMessage('');
+    setError('');
+
+    if (password && password !== confirmPassword) {
+      setError("Passwords don't match.");
+      return;
+    }
+
+    const result = await api.updateProfile({ 
+      userId: user.id, 
+      username, 
+      password: password || undefined 
+    });
+
+    if (result.success) {
+      setMessage(result.message);
+      onUpdate({ ...user, username });
+      setPassword('');
+      setConfirmPassword('');
+    } else {
+      setError(result.message);
+    }
+  };
+
+  return (
+    <div className="section-card" style={{maxWidth: '500px', margin: '0 auto'}}>
+      <h3>Profile Settings</h3>
+      <form onSubmit={handleSubmit} style={{boxShadow: 'none', padding: '0'}}>
+        <div className="form-group">
+          <label htmlFor="profile-username">Username</label>
+          <input
+            id="profile-username"
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+          />
+        </div>
+        <div className="form-group">
+          <label htmlFor="profile-password">New Password (leave blank to keep)</label>
+          <input
+            id="profile-password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="New Password"
+          />
+        </div>
+        {password && (
+          <div className="form-group">
+            <label htmlFor="profile-confirm">Confirm New Password</label>
+            <input
+              id="profile-confirm"
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="Confirm Password"
+            />
+          </div>
+        )}
+        {error && <p className="auth-error">{error}</p>}
+        {message && <p className="auth-success">{message}</p>}
+        <div className="actions">
+            <button type="submit" className="primary">Update Profile</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function BorrowingTrendsChart({ data }) {
+  if (!data || data.length === 0) return <p className="no-data">No borrowing data available yet.</p>;
+
+  const maxCount = Math.max(...data.map(d => d.count));
+
+  return (
+    <div className="chart-container">
+      <div className="chart-bars">
+        {data.map((item, index) => (
+          <div key={index} className="chart-bar-wrapper">
+            <div className="chart-bar" style={{ height: `${(item.count / maxCount) * 100}%` }}>
+              <span className="chart-tooltip">{item.count}</span>
+            </div>
+            <span className="chart-label">{new Date(item.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MainScreen({ user, onLogout, onUserUpdate }) {
   const [books, setBooks] = useState([]);
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
   const [copies, setCopies] = useState(1);
+  const [coverImage, setCoverImage] = useState('');
   const [selectedBook, setSelectedBook] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'inventory', 'admin'
   const [searchTerm, setSearchTerm] = useState('');
   const [availabilityFilter, setAvailabilityFilter] = useState('all'); // 'all', 'available', 'borrowed'
+  const [mostBorrowedBooks, setMostBorrowedBooks] = useState([]);
+  const [borrowingTrends, setBorrowingTrends] = useState([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [overdueBooks, setOverdueBooks] = useState([]);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const itemsPerPage = 8;
 
   // The 'api' object is available globally
   const { api } = window;
@@ -276,13 +471,43 @@ function MainScreen({ user, onLogout }) {
     api.getBooks().then((fetchedBooks) => {
       setBooks(fetchedBooks);
     });
+    api.getMostBorrowedBooks().then((result) => {
+      if (result.success) {
+        setMostBorrowedBooks(result.books);
+      }
+    });
+    api.getBorrowingTrends().then((result) => {
+      if (result.success) {
+        setBorrowingTrends(result.trends);
+      }
+    });
+    api.getOverdueBooks().then((result) => {
+      if (result.success) {
+        setOverdueBooks(result.overdueBooks);
+      }
+    });
   }, [api]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, availabilityFilter]);
   
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setCoverImage(reader.result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!title || !author || copies < 1) return;
 
-    const newBook = { title, author, copies: parseInt(copies, 10) };
+    const newBook = { title, author, copies: parseInt(copies, 10), coverImage };
     const addedBook = await api.addBook(newBook);
 
     setBooks([...books, addedBook]);
@@ -291,8 +516,23 @@ function MainScreen({ user, onLogout }) {
     setCopies(1);
     api.getBooks().then((fetchedBooks) => {
       setBooks(fetchedBooks);
+      setCoverImage('');
     });
  };
+
+ const handleUpdateBook = async (updatedBook) => {
+    const result = await api.updateBook(updatedBook);
+    if (result.success) {
+      // Refresh books
+      const fetchedBooks = await api.getBooks();
+      setBooks(fetchedBooks);
+      // Update selected book to reflect changes immediately in modal
+      const refreshedBook = fetchedBooks.find(b => b.id === updatedBook.id);
+      setSelectedBook(refreshedBook);
+    } else {
+      alert('Failed to update book: ' + result.message);
+    }
+  };
 
   const handleBorrow = async (bookId, borrowDetails) => {
     try {
@@ -310,6 +550,18 @@ function MainScreen({ user, onLogout }) {
         // Refresh books from backend to ensure consistency
         const fetchedBooks = await api.getBooks();
         setBooks(fetchedBooks);
+        
+        // Refresh most borrowed stats
+        const mostBorrowed = await api.getMostBorrowedBooks();
+        if (mostBorrowed.success) {
+          setMostBorrowedBooks(mostBorrowed.books);
+        }
+        // Refresh trends
+        const trends = await api.getBorrowingTrends();
+        if (trends.success) {
+          setBorrowingTrends(trends.trends);
+        }
+
         setSelectedBook(null); // Close modal on success
         alert('Book borrowed successfully!');
       } else {
@@ -327,6 +579,12 @@ function MainScreen({ user, onLogout }) {
       // Refresh books from backend to ensure consistency
       const fetchedBooks = await api.getBooks();
       setBooks(fetchedBooks);
+
+      // Refresh overdue books
+      const overdueResult = await api.getOverdueBooks();
+      if (overdueResult.success) {
+        setOverdueBooks(overdueResult.overdueBooks);
+      }
       setSelectedBook(null); // Close modal on success
     } else {
       alert('Failed to return book: ' + (result.message || 'Unknown error'));
@@ -354,16 +612,51 @@ function MainScreen({ user, onLogout }) {
 
   const displayedBooks = getFilteredBooks();
 
+  // Pagination Logic
+  const indexOfLastBook = currentPage * itemsPerPage;
+  const indexOfFirstBook = indexOfLastBook - itemsPerPage;
+  const currentBooks = displayedBooks.slice(indexOfFirstBook, indexOfLastBook);
+  const totalPages = Math.ceil(displayedBooks.length / itemsPerPage);
+
   return (
     <div className="container">
       <div className="main-header">
         <h1>Librico Dashboard</h1>
-        <button onClick={onLogout} className="logout-btn">Logout</button>
+        <div className="header-actions">
+          <div className="notification-wrapper">
+            <button className="notification-btn" onClick={() => setShowNotifications(!showNotifications)}>
+              <BellIcon />
+              {overdueBooks.length > 0 && <span className="notification-badge">{overdueBooks.length}</span>}
+            </button>
+            {showNotifications && (
+              <div className="notification-dropdown">
+                <h3>Overdue Books</h3>
+                {overdueBooks.length > 0 ? (
+                  <ul>
+                    {overdueBooks.map(book => (
+                      <li key={book.id} className="notification-item">
+                        <strong>{book.title}</strong>
+                        <br/>
+                        <small>Borrowed by: {book.student_name}</small>
+                        <br/>
+                        <small className="overdue-date">Due: {new Date(book.due_date).toLocaleDateString()}</small>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="no-notifications">No overdue books.</p>
+                )}
+              </div>
+            )}
+          </div>
+          <button onClick={onLogout} className="logout-btn">Logout</button>
+        </div>
       </div>
 
       <div className="tabs">
         <button onClick={() => setActiveTab('dashboard')} className={activeTab === 'dashboard' ? 'active' : ''}>Dashboard</button>
         <button onClick={() => setActiveTab('inventory')} className={activeTab === 'inventory' ? 'active' : ''}>Inventory</button>
+        <button onClick={() => setActiveTab('profile')} className={activeTab === 'profile' ? 'active' : ''}>Profile</button>
         {user.is_admin && (
           <button onClick={() => setActiveTab('admin')} className={activeTab === 'admin' ? 'active' : ''}>Admin Panel</button>
         )}
@@ -384,6 +677,31 @@ function MainScreen({ user, onLogout }) {
               <h3>Borrowed</h3>
               <p>{books.reduce((acc, b) => acc + (b.total_copies - b.copies_available), 0)}</p>
             </div>
+          </div>
+
+          <div className="section-card">
+            <h3>Borrowing Trends (Last 7 Days)</h3>
+            <BorrowingTrendsChart data={borrowingTrends} />
+          </div>
+
+          <div className="section-card">
+            <h3>Most Borrowed Books</h3>
+            {mostBorrowedBooks.length > 0 ? (
+              <ul className="most-borrowed-list">
+                {mostBorrowedBooks.map((book, index) => (
+                  <li key={index}>
+                    <span className="rank">#{index + 1}</span>
+                    <div className="book-info">
+                      <h4>{book.title}</h4>
+                      <p>{book.author}</p>
+                    </div>
+                    <span className="count">{book.count} borrows</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>No borrowing history yet.</p>
+            )}
           </div>
 
           <div className="section-card">
@@ -411,6 +729,14 @@ function MainScreen({ user, onLogout }) {
               min="1"
               required
             />
+            <div className="file-input-wrapper">
+              <label style={{fontSize: '0.9rem', color: 'var(--text-muted)'}}>Cover Image (Optional)</label>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleImageUpload}
+              />
+            </div>
             <button type="submit">Add Book</button>
           </form>
           </div>
@@ -444,10 +770,14 @@ function MainScreen({ user, onLogout }) {
               </select>
           </div>
           <div className="book-grid">
-            {filteredBooks.length > 0 ? (
-              filteredBooks.map((book) => (
+            {currentBooks.length > 0 ? (
+              currentBooks.map((book) => (
                 <div key={book.id} className="book-card" onClick={() => setSelectedBook(book)}>
-                  <div className="book-icon">📖</div>
+                  {book.cover_image ? (
+                    <img src={book.cover_image} alt={book.title} className="book-cover-thumb" />
+                  ) : (
+                    <div className="book-icon">📖</div>
+                  )}
                   <h3>{book.title}</h3>
                   <p className="book-author">by {book.author}</p>
                   <div className={`status-badge ${book.copies_available > 0 ? 'available' : 'out'}`}>
@@ -459,14 +789,31 @@ function MainScreen({ user, onLogout }) {
               <p className="no-results">No books found matching your search.</p>
             )}
           </div>
+          
+          {totalPages > 1 && (
+            <div className="pagination">
+              <button 
+                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))} 
+                disabled={currentPage === 1}
+              >Previous</button>
+              <span>Page {currentPage} of {totalPages}</span>
+              <button 
+                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))} 
+                disabled={currentPage === totalPages}
+              >Next</button>
+            </div>
+          )}
         </div>
       )}
+
+      {activeTab === 'profile' && <ProfileSettings user={user} onUpdate={onUserUpdate} />}
 
       <BookDetailModal
         book={selectedBook}
         onClose={() => setSelectedBook(null)}
         onBorrow={handleBorrow}
         onReturn={handleReturn}
+        onUpdate={handleUpdateBook}
       />
 
       {activeTab === 'admin' && user.is_admin && <AdminPanel />}
@@ -514,6 +861,12 @@ const EyeSlashIcon = () => (
     <path d="M11.297 9.176a3.5 3.5 0 0 0-4.474-4.474l.823.823a2.5 2.5 0 0 1 2.829 2.829l.822.822zm-2.943 1.288.822.822a3.5 3.5 0 0 1-4.474-4.474l.823.823a2.5 2.5 0 0 0 2.829 2.829z"/>
     <path d="M3.35 5.47c-.18.16-.353.322-.518.487A13.134 13.134 0 0 0 1.172 8l.195.288c.335.48.83 1.12 1.465 1.755C4.121 11.332 5.881 12 8 12c.778 0 1.52-.117 2.207-.344l.685.685A8.917 8.917 0 0 1 8 12.5c-2.12 0-3.879-.668-5.168-1.957A13.134 13.134 0 0 1 1.172 8z"/>
     <path d="M1 13.5a.5.5 0 0 1 .5-.5h13a.5.5 0 0 1 0 1h-13a.5.5 0 0 1-.5-.5z"/>
+  </svg>
+);
+
+const BellIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16">
+    <path d="M8 16a2 2 0 0 0 2-2H6a2 2 0 0 0 2 2zM8 1.918l-.797.161A4.002 4.002 0 0 0 4 6c0 .628-.134 2.197-.459 3.742-.16.767-.376 1.566-.663 2.258h10.244c-.287-.692-.502-1.49-.663-2.258C12.134 8.197 12 6.628 12 6a4.002 4.002 0 0 0-3.203-3.92L8 1.917zM14.22 12c.223.447.481.801.78 1H1c.299-.199.557-.553.78-1C2.68 10.2 3 6.88 3 6c0-2.42 1.72-4.44 4.005-4.901a1 1 0 1 1 1.99 0A5.002 5.002 0 0 1 13 6c0 .88.32 4.2 1.22 6z"/>
   </svg>
 );
 
@@ -582,6 +935,9 @@ function LoginScreen({ onLoginSuccess, onNavigate }) {
         <div className="actions">
           <button type="submit" className="primary">Login</button>
           <button type="button" className="secondary" onClick={() => onNavigate('register')}>Need an account?</button>
+        </div>
+        <div style={{textAlign: 'center', marginTop: '10px'}}>
+            <button type="button" className="link-btn" onClick={() => onNavigate('forgot-password')}>Forgot Password?</button>
         </div>
         <div className="auth-footer">
           <button className="link-btn" onClick={() => onNavigate('welcome')}>Back to Welcome</button>
@@ -739,10 +1095,107 @@ function VerifyEmailScreen({ onNavigate, initialEmail }) {
   );
 }
 
+function ForgotPasswordScreen({ onNavigate }) {
+  const [email, setEmail] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const { api } = window;
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setMessage('');
+    const result = await api.forgotPassword({ email });
+    if (result.success) {
+      setMessage(result.message);
+      setTimeout(() => onNavigate('reset-password', { email }), 2000);
+    } else {
+      setError(result.message);
+    }
+  };
+
+  return (
+    <div className="auth-container">
+      <form onSubmit={handleSubmit}>
+        <h2>Forgot Password</h2>
+        <p style={{textAlign: 'center', marginBottom: '1rem'}}>Enter your email to receive a reset token.</p>
+        <div className="form-group">
+          <label htmlFor="email">Email Address</label>
+          <input
+            id="email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+        </div>
+        {error && <p className="auth-error">{error}</p>}
+        {message && <p className="auth-success">{message}</p>}
+        <div className="actions">
+          <button type="submit" className="primary">Send Token</button>
+          <button type="button" className="secondary" onClick={() => onNavigate('login')}>Back to Login</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function ResetPasswordScreen({ onNavigate, initialEmail }) {
+  const [email, setEmail] = useState(initialEmail || '');
+  const [token, setToken] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const { api } = window;
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setMessage('');
+    const result = await api.resetPassword({ email, token, newPassword });
+    if (result.success) {
+      setMessage(result.message);
+      setTimeout(() => onNavigate('login'), 2000);
+    } else {
+      setError(result.message);
+    }
+  };
+
+  return (
+    <div className="auth-container">
+      <form onSubmit={handleSubmit}>
+        <h2>Reset Password</h2>
+        <div className="form-group">
+          <label htmlFor="email">Email Address</label>
+          <input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+        </div>
+        <div className="form-group">
+          <label htmlFor="token">Reset Token</label>
+          <input id="token" type="text" placeholder="Enter 6-digit token" value={token} onChange={(e) => setToken(e.target.value)} required />
+        </div>
+        <div className="form-group">
+          <label htmlFor="newPassword">New Password</label>
+          <input id="newPassword" type="password" placeholder="New Password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required />
+        </div>
+        {error && <p className="auth-error">{error}</p>}
+        {message && <p className="auth-success">{message}</p>}
+        <div className="actions">
+          <button type="submit" className="primary">Reset Password</button>
+          <button type="button" className="secondary" onClick={() => onNavigate('login')}>Back to Login</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function App() {
   const [view, setView] = useState('welcome'); // 'welcome', 'login', 'register', 'verify', 'main'
   const [user, setUser] = useState(null);
   const [verificationEmail, setVerificationEmail] = useState('');
+
+  const handleUserUpdate = (updatedUser) => {
+    setUser(updatedUser);
+  };
 
   const handleLoginSuccess = (loggedInUser) => {
     setUser(loggedInUser);
@@ -768,8 +1221,12 @@ function App() {
       return <RegisterScreen key="register" onNavigate={handleNavigation} setInitialEmailForVerification={setVerificationEmail} />;
     case 'verify':
       return <VerifyEmailScreen key="verify" onNavigate={handleNavigation} initialEmail={verificationEmail} />;
+    case 'forgot-password':
+      return <ForgotPasswordScreen key="forgot-password" onNavigate={handleNavigation} />;
+    case 'reset-password':
+      return <ResetPasswordScreen key="reset-password" onNavigate={handleNavigation} initialEmail={verificationEmail} />;
     case 'main':
-      return <MainScreen key="main" user={user} onLogout={handleLogout} />;
+      return <MainScreen key="main" user={user} onLogout={handleLogout} onUserUpdate={handleUserUpdate} />;
     case 'welcome':
     default:
       return <WelcomeScreen key="welcome" onNavigate={handleNavigation} />;
