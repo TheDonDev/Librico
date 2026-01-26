@@ -26,6 +26,8 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
   const [editAuthor, setEditAuthor] = useState('');
   const [editCopies, setEditCopies] = useState(0);
   const [editCoverImage, setEditCoverImage] = useState('');
+  const [borrowSuccess, setBorrowSuccess] = useState('');
+  const [borrowError, setBorrowError] = useState('');
 
   // Helper to format a Date object into a string suitable for datetime-local input
   const toDateTimeLocal = (date) => {
@@ -88,8 +90,12 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
   const handleBorrowSubmit = async (e) => {
     e.preventDefault();
     if (isSubmitting) return;
+    
+    setBorrowSuccess('');
+    setBorrowError('');
+
     if (!studentName || !admissionNumber || !borrowedDate || !dueDate) {
-      alert('Please fill in all student details and dates.');
+      setBorrowError('Please fill in all student details and dates.');
       return;
     }
 
@@ -103,9 +109,16 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
         dueDate: new Date(dueDate).toISOString(),
       };
       await onBorrow(book.id, borrowDetails);
+      // If onBorrow doesn't throw, it was successful.
+      setBorrowSuccess('Book borrowed successfully!');
+      // Clear form for the next entry
+      setStudentName('');
+      setAdmissionNumber('');
+      setStudentForm('1');
+      setTimeout(() => setBorrowSuccess(''), 3000);
     } catch (error) {
       console.error("Error processing borrow details:", error);
-      alert("An error occurred while borrowing the book. Please check the details.");
+      setBorrowError(`An error occurred while borrowing the book: ${error.message}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -166,6 +179,8 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
         {!isEditing && book.copies_available > 0 && (
           <div className="borrow-section">
             <h3>Borrow a Copy</h3>
+            {borrowSuccess && <p className="auth-success">{borrowSuccess}</p>}
+            {borrowError && <p className="auth-error">{borrowError}</p>}
             <form onSubmit={handleBorrowSubmit} className="borrow-form">
               <input
                 type="text"
@@ -535,22 +550,21 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
   };
 
   const handleBorrow = async (bookId, borrowDetails) => {
+    // This function will now throw on error, allowing the caller (the modal)
+    // to handle UI feedback like alerts.
     try {
        if (bookId == null || borrowDetails == null) {
-          console.error("Invalid bookId or borrowDetails:", bookId, borrowDetails);
-          alert("Failed to borrow book: Invalid book details.");
-          return;
+          throw new Error("Invalid book details provided.");
         }
        if (typeof bookId !== 'number') {
-            console.error("bookId is not a number:", bookId);
-            return;
+            throw new Error("Book ID is invalid.");
         }
       const result = await api.borrowBook({ bookId, borrowDetails });
       if (result.success) {
         // Refresh books from backend to ensure consistency
         const fetchedBooks = await api.getBooks();
         setBooks(fetchedBooks);
-        
+
         // Refresh most borrowed stats
         const mostBorrowed = await api.getMostBorrowedBooks();
         if (mostBorrowed.success) {
@@ -562,14 +576,16 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
           setBorrowingTrends(trends.trends);
         }
 
-        setSelectedBook(null); // Close modal on success
-        alert('Book borrowed successfully!');
+        // Instead of closing the modal, find the updated book and refresh its data.
+        // This improves UX for borrowing multiple copies.
+        const refreshedBook = fetchedBooks.find(b => b.id === bookId);
+        setSelectedBook(refreshedBook || null); // Fallback to closing if book not found
       } else {
-        alert('Failed to borrow book: ' + (result.message || 'Unknown error'));
+        throw new Error(result.message || 'An unknown error occurred.');
       }
     } catch (error) {
-      console.error("Borrow operation failed:", error);
-      alert("An unexpected error occurred while borrowing the book.");
+      console.error("Borrow operation failed in MainScreen:", error);
+      throw error; // Re-throw for the modal to catch and display
     }
   };
 
