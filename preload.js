@@ -24,4 +24,7 @@ contextBridge.exposeInMainWorld('api', {
   getMostBorrowedBooks: () => ipcRenderer.invoke('get-most-borrowed-books'),
   getBorrowingTrends: () => ipcRenderer.invoke('get-borrowing-trends'),
   getOverdueBooks: () => ipcRenderer.invoke('get-overdue-books'),
+  // Settings & Licensing
+  getSettings: () => ipcRenderer.invoke('get-settings'),
+  updateSettings: (settings) => ipcRenderer.invoke('update-settings', settings),
 });

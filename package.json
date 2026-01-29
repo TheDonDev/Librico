@@ -12,7 +12,8 @@
     "dev:react": "npm run dev --workspace=renderer",
     "dev:electron": "wait-on http://localhost:5173 && nodemon --exec \"electron .\"",
     "build": "npm run build --workspace=renderer",
-    "package": "npm run build && electron-builder"
+    "package": "npm run build && electron-builder",
+    "make": "npm run package"
   },
   "keywords": [],
   "author": {
@@ -47,8 +48,15 @@
         "portable"
       ],
       "icon": "build/icon.ico",
-      "certificateFile": "librico-test-cert.pfx",
-      "certificatePassword": "${env.CSC_KEY_PASSWORD}"
+      "cscLink": "librico-test-cert.pfx",
+      "cscKeyPassword": "${env.CSC_KEY_PASSWORD}",
+      "publish": [
+        {
+          "provider": "github",
+          "owner": "TheDonDev",
+          "repo": "Librico"
+        }
+      ]
     },
     "mac": {
       "target": "dmg",
@@ -69,7 +77,7 @@
   },
   "devDependencies": {
     "concurrently": "^8.2.2",
-    "electron": "^29.1.4",
+    "electron": "^40.1.0",
     "electron-builder": "^26.0.12",
     "nodemon": "^3.1.0",
     "wait-on": "^7.2.0"
@@ -77,8 +85,9 @@
   "dependencies": {
     "bcrypt": "^6.0.0",
     "electron-squirrel-startup": "^1.0.1",
+    "electron-updater": "^6.7.3",
     "knex": "^3.1.0",
     "nodemailer": "^7.0.10",
-    "sqlite3": "^5.1.7"
+    "sqlite3": "^5.0.2"
   }
 }

@@ -5,6 +5,8 @@ import libraryBackground2 from './assets/images/BackScreenshot2.png';
 import libraryBackground3 from './assets/images/BackScreenshot3.png';
 import libraryBackground4 from './assets/images/BackScreenshot4.png';
 import libraryBackground5 from './assets/images/BackScreenshot5.png';
+import LicenseWidget from './components/LicenseWidget';
+import LicenseSettings from './components/LicenseSettings';
 
 const backgroundImages = [
   libraryBackground1,
@@ -26,6 +28,9 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
   const [editAuthor, setEditAuthor] = useState('');
   const [editCopies, setEditCopies] = useState(0);
   const [editCoverImage, setEditCoverImage] = useState('');
+  const [editEdition, setEditEdition] = useState('');
+  const [editPublicationYear, setEditPublicationYear] = useState('');
+  const [editIsbn, setEditIsbn] = useState('');
   const [borrowSuccess, setBorrowSuccess] = useState('');
   const [borrowError, setBorrowError] = useState('');
 
@@ -50,6 +55,9 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
       setEditAuthor(book.author);
       setEditCopies(book.total_copies);
       setEditCoverImage(book.cover_image || '');
+      setEditEdition(book.edition || '');
+      setEditPublicationYear(book.publication_year || '');
+      setEditIsbn(book.isbn || '');
     }
   }, [book]);
 
@@ -77,7 +85,10 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
         title: editTitle,
         author: editAuthor,
         total_copies: parseInt(editCopies, 10),
-        cover_image: editCoverImage
+        cover_image: editCoverImage,
+        edition: editEdition,
+        publication_year: editPublicationYear,
+        isbn: editIsbn
       });
       setIsEditing(false);
     } catch (error) {
@@ -139,6 +150,8 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
               <img src={book.cover_image} alt={book.title} className="modal-book-cover" />
             )}
             <p>by {book.author}</p>
+            <p><strong>Edition:</strong> {book.edition || 'N/A'} | <strong>Year:</strong> {book.publication_year || 'N/A'}</p>
+            <p><strong>ISBN:</strong> {book.isbn || 'N/A'}</p>
             <p><strong>Available:</strong> {book.copies_available} / {book.total_copies}</p>
             <hr />
           </>
@@ -152,6 +165,15 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
               <label>Author</label>
               <input type="text" value={editAuthor} onChange={(e) => setEditAuthor(e.target.value)} required />
               
+              <label>Edition</label>
+              <input type="text" value={editEdition} onChange={(e) => setEditEdition(e.target.value)} />
+
+              <label>Year of Publication</label>
+              <input type="text" value={editPublicationYear} onChange={(e) => setEditPublicationYear(e.target.value)} />
+
+              <label>ISBN (Optional)</label>
+              <input type="text" value={editIsbn} onChange={(e) => setEditIsbn(e.target.value)} />
+
               <label>Total Copies</label>
               <input type="number" value={editCopies} onChange={(e) => setEditCopies(e.target.value)} min="1" required />
               
@@ -467,6 +489,11 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
   const [author, setAuthor] = useState('');
   const [copies, setCopies] = useState(1);
   const [coverImage, setCoverImage] = useState('');
+  const [edition, setEdition] = useState('');
+  const [publicationYear, setPublicationYear] = useState('');
+  const [isbn, setIsbn] = useState('');
+  const [qrInput, setQrInput] = useState('');
+  const [scanning, setScanning] = useState(false);
   const [selectedBook, setSelectedBook] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'inventory', 'admin'
   const [searchTerm, setSearchTerm] = useState('');
@@ -522,13 +549,17 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
     e.preventDefault();
     if (!title || !author || copies < 1) return;
 
-    const newBook = { title, author, copies: parseInt(copies, 10), coverImage };
+    const newBook = { title, author, copies: parseInt(copies, 10), coverImage, edition, publicationYear, isbn };
     const addedBook = await api.addBook(newBook);
 
     setBooks([...books, addedBook]);
     setTitle('');
     setAuthor('');
     setCopies(1);
+    setEdition('');
+    setPublicationYear('');
+    setIsbn('');
+    setQrInput('');
     api.getBooks().then((fetchedBooks) => {
       setBooks(fetchedBooks);
       setCoverImage('');
@@ -634,6 +665,28 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
   const currentBooks = displayedBooks.slice(indexOfFirstBook, indexOfLastBook);
   const totalPages = Math.ceil(displayedBooks.length / itemsPerPage);
 
+  const handleQrScan = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      try {
+        // Try parsing as JSON first (e.g. {"title":"...", "isbn":"..."})
+        const data = JSON.parse(qrInput);
+        if (data.title) setTitle(data.title);
+        if (data.author) setAuthor(data.author);
+        if (data.edition) setEdition(data.edition);
+        if (data.year) setPublicationYear(data.year);
+        if (data.isbn) setIsbn(data.isbn);
+      } catch (err) {
+        // If not JSON, assume it's just an ISBN/ID scan
+        setIsbn(qrInput);
+      }
+    }
+  };
+
+  const startScan = () => {
+    setScanning(true);
+  };
+
   return (
     <div className="container">
       <div className="main-header">
@@ -676,6 +729,9 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
         {user.is_admin && (
           <button onClick={() => setActiveTab('admin')} className={activeTab === 'admin' ? 'active' : ''}>Admin Panel</button>
         )}
+        {user.is_admin && (
+          <button onClick={() => setActiveTab('license')} className={activeTab === 'license' ? 'active' : ''}>License</button>
+        )}
       </div>
 
       {activeTab === 'dashboard' && (
@@ -693,6 +749,10 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
               <h3>Borrowed</h3>
               <p>{books.reduce((acc, b) => acc + (b.total_copies - b.copies_available), 0)}</p>
             </div>
+          </div>
+
+          <div style={{ marginBottom: '20px' }}>
+            <LicenseWidget />
           </div>
 
           <div className="section-card">
@@ -722,6 +782,22 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
 
           <div className="section-card">
             <h3>Add New Book</h3>
+            <button onClick={startScan} disabled={scanning}>
+                {scanning ? 'Scanning...' : 'Start QR Scan'}
+            </button>
+            {scanning && (
+                <p>scanning enabled</p>
+            )}
+            <div className="qr-scan-wrapper" style={{ marginBottom: '15px' }}>
+              <input
+                type="text"
+                placeholder="Scan QR Code / Barcode here to auto-fill..."
+                value={qrInput}
+                onChange={(e) => setQrInput(e.target.value)}
+                onKeyDown={handleQrScan}
+                style={{ width: '100%', padding: '10px', border: '2px dashed #ccc', borderRadius: '4px' }}
+              />
+            </div>
           <form onSubmit={handleSubmit} className="book-form">
             <input
               type="text"
@@ -736,6 +812,28 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
               onChange={(e) => setAuthor(e.target.value)}
               placeholder="Author"
               required
+            />
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <input
+                type="text"
+                value={edition}
+                onChange={(e) => setEdition(e.target.value)}
+                placeholder="Edition"
+                style={{ flex: 1 }}
+              />
+              <input
+                type="text"
+                value={publicationYear}
+                onChange={(e) => setPublicationYear(e.target.value)}
+                placeholder="Year of Publication"
+                style={{ flex: 1 }}
+              />
+            </div>
+            <input
+              type="text"
+              value={isbn}
+              onChange={(e) => setIsbn(e.target.value)}
+              placeholder="ISBN (Optional)"
             />
             <input
               type="number"
@@ -833,6 +931,7 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
       />
 
       {activeTab === 'admin' && user.is_admin && <AdminPanel />}
+      {activeTab === 'license' && user.is_admin && <LicenseSettings />}
     </div>
   );
 }
