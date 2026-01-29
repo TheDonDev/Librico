@@ -46,7 +46,9 @@
         "nsis",
         "portable"
       ],
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "certificateFile": "librico-test-cert.pfx",
+      "certificatePassword": "${env.CSC_KEY_PASSWORD}"
     },
     "mac": {
       "target": "dmg",

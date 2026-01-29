@@ -1,0 +1,41 @@
+name: Build and Sign Application
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Decode Certificate
+        run: |
+          $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.CSC_LINK_BASE64 }}")
+          $pfx_path = "librico-test-cert.pfx"
+          [System.IO.File]::WriteAllBytes($pfx_path, $pfx_cert_byte)
+        shell: powershell
+
+      - name: Build and sign application
+        run: npm run package
+        env:
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: librico-installer
+          path: dist/
