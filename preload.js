@@ -27,4 +27,5 @@ contextBridge.exposeInMainWorld('api', {
   // Settings & Licensing
   getSettings: () => ipcRenderer.invoke('get-settings'),
   updateSettings: (settings) => ipcRenderer.invoke('update-settings', settings),
+  openExternalLink: (url) => ipcRenderer.send('open-external-link', url),
 });

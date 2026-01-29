@@ -1054,8 +1054,11 @@ function LoginScreen({ onLoginSuccess, onNavigate }) {
         <div style={{textAlign: 'center', marginTop: '10px'}}>
             <button type="button" className="link-btn" onClick={() => onNavigate('forgot-password')}>Forgot Password?</button>
         </div>
-        <div className="auth-footer">
-          <button className="link-btn" onClick={() => onNavigate('welcome')}>Back to Welcome</button>
+        <div className="auth-footer" style={{ display: 'flex', justifyContent: 'center', gap: '20px', alignItems: 'center' }}>
+          <button type="button" className="link-btn" onClick={() => onNavigate('welcome')}>Back to Welcome</button>
+          <button type="button" className="link-btn" onClick={() => window.api.openExternalLink('mailto:donaldmwanga33@gmail.com?subject=Librico Support Request')}>
+            Contact Support
+          </button>
         </div>
       </form>
     </div>
@@ -1142,8 +1145,11 @@ function RegisterScreen({ onNavigate, setInitialEmailForVerification }) {
           <button type="submit" className="primary">Register</button>
           <button type="button" className="secondary" onClick={() => onNavigate('login')}>Login</button>
         </div>
-        <div className="auth-footer">
-          <button className="link-btn" onClick={() => onNavigate('welcome')}>Back to Welcome</button>
+        <div className="auth-footer" style={{ display: 'flex', justifyContent: 'center', gap: '20px', alignItems: 'center' }}>
+          <button type="button" className="link-btn" onClick={() => onNavigate('welcome')}>Back to Welcome</button>
+          <button type="button" className="link-btn" onClick={() => window.api.openExternalLink('mailto:donaldmwanga33@gmail.com?subject=Librico Support Request')}>
+            Contact Support
+          </button>
         </div>
       </form>
     </div>

@@ -11,6 +11,7 @@ if (require('electron-squirrel-startup')) {
   app.quit();
 }
 
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
@@ -18,18 +19,27 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     autoHideMenuBar: true,
+    // The icon path for the window.
+    // In production, it's in the resources folder. In dev, it's in the root.
     icon: path.join(__dirname, app.isPackaged ? '../resources/icon.ico' : 'build/icon.ico'),
     webPreferences: {
+      // The preload script is the bridge between Node.js and the renderer (React)
       preload: path.join(__dirname, 'preload.js'),
+      // It's recommended to keep contextIsolation on for security
       contextIsolation: true,
+      // It's recommended to disable nodeIntegration for security
       nodeIntegration: false,
     },
   });
 
+  // Load the React app
+  // In development, we load from the Vite dev server.
+  // In production, we load the built HTML file.
   if (app.isPackaged) {
     win.loadFile(path.join(__dirname, 'renderer', 'dist', 'index.html'));
   } else {
     win.loadURL('http://localhost:5173');
+    // Open the DevTools.
     win.webContents.openDevTools();
   }
 
@@ -48,16 +58,20 @@ function validateLicense(licenseKey) {
   try {
     if (!licenseKey) return { isValid: false, reason: 'No key provided' };
     
+    // Decode Base64
     const decoded = Buffer.from(licenseKey, 'base64').toString('utf-8');
     const parts = decoded.split('|');
     
+    // We expect JSON|Signature
     if (parts.length !== 2) return { isValid: false, reason: 'Invalid format' };
     
     const [dataString, signature] = parts;
     
+    // Verify Signature
     const expectedSignature = crypto.createHmac('sha256', LICENSE_SECRET).update(dataString).digest('hex');
     if (signature !== expectedSignature) return { isValid: false, reason: 'Invalid signature' };
 
+    // Check Expiry
     const data = JSON.parse(dataString);
     const expiryDate = new Date(data.expiry);
     const now = new Date();
@@ -71,36 +85,32 @@ function validateLicense(licenseKey) {
   }
 }
 
+// Example: Get all books
 ipcMain.handle('get-books', async () => {
-  try {
-    const books = await db('books').select('*');
-    const hasBorrowedRecords = await db.schema.hasTable('borrowed_records');
-    let borrowedRecords = [];
-    if (hasBorrowedRecords) {
-      borrowedRecords = await db('borrowed_records').where('returned', false).select('*');
-    }
-    
-    const booksWithRecords = books.map(book => {
-      const records = borrowedRecords
-        .filter(r => r.book_id == book.id)
-        .map(r => ({
-          id: r.id,
-          studentName: r.student_name,
-          studentForm: r.student_form,
-          admissionNumber: r.admission_number,
-          borrowedDate: r.borrowed_date,
-          dueDate: r.due_date
-        }));
-      return { ...book, borrowed_records: records };
-    });
+  const books = await db('books').select('*');
+  
+  // Fetch active borrowed records
+  const borrowedRecords = await db('borrowed_records').where('returned', false).select('*');
+  
+  // Map records to books
+  const booksWithRecords = books.map(book => {
+    const records = borrowedRecords
+      .filter(r => r.book_id == book.id)
+      .map(r => ({
+        id: r.id,
+        studentName: r.student_name,
+        studentForm: r.student_form,
+        admissionNumber: r.admission_number,
+        borrowedDate: r.borrowed_date,
+        dueDate: r.due_date
+      }));
+    return { ...book, borrowed_records: records };
+  });
 
-    return booksWithRecords;
-  } catch (error) {
-    console.error('Get books error:', error);
-    return [];
-  }
+  return booksWithRecords;
 });
 
+// Example: Add a book
 ipcMain.handle('add-book', async (event, book) => {
   const bookToInsert = {
     title: book.title,
@@ -112,11 +122,13 @@ ipcMain.handle('add-book', async (event, book) => {
     publication_year: book.publicationYear,
     isbn: book.isbn,
   };
+  // Handle SQLite insert return which is typically [id]
   const [result] = await db('books').insert(bookToInsert);
   const id = (typeof result === 'object' && result !== null) ? result.id : result;
   return { ...bookToInsert, id: Number(id) };
 });
 
+// Update a book
 ipcMain.handle('update-book', async (event, book) => {
   try {
     const { id, title, author, total_copies, cover_image, edition, publication_year, isbn } = book;
@@ -143,8 +155,10 @@ ipcMain.handle('update-book', async (event, book) => {
   }
 });
 
+// Borrow a book
 ipcMain.handle('borrow-book', async (event, { bookId, borrowDetails }) => {
   try {
+    // Check License Validity
     const setting = await db('settings').where({ key: 'license_key' }).first();
     const validation = validateLicense(setting ? setting.value : '');
     if (!validation.isValid) {
@@ -171,6 +185,7 @@ ipcMain.handle('borrow-book', async (event, { bookId, borrowDetails }) => {
   }
 });
 
+// Return a book
 ipcMain.handle('return-book', async (event, { bookId, recordId }) => {
   try {
     await db.transaction(async trx => {
@@ -184,6 +199,7 @@ ipcMain.handle('return-book', async (event, { bookId, recordId }) => {
   }
 });
 
+// Get most borrowed books
 ipcMain.handle('get-most-borrowed-books', async () => {
   try {
     const results = await db('borrowed_records')
@@ -200,14 +216,17 @@ ipcMain.handle('get-most-borrowed-books', async () => {
   }
 });
 
+// Get borrowing trends
 ipcMain.handle('get-borrowing-trends', async () => {
   try {
+    // Group by date (YYYY-MM-DD) and count
     const results = await db('borrowed_records')
       .select(db.raw('substr(borrowed_date, 1, 10) as date'), db.raw('count(*) as count'))
       .groupBy('date')
       .orderBy('date', 'desc')
-      .limit(7);
+      .limit(7); // Last 7 active days
     
+    // Reverse to show chronological order (oldest to newest)
     return { success: true, trends: results.reverse() };
   } catch (error) {
     console.error('Error fetching borrowing trends:', error);
@@ -215,6 +234,7 @@ ipcMain.handle('get-borrowing-trends', async () => {
   }
 });
 
+// Get overdue books
 ipcMain.handle('get-overdue-books', async () => {
   try {
     const now = new Date().toISOString();
@@ -236,6 +256,8 @@ ipcMain.handle('get-overdue-books', async () => {
 });
 
 async function sendVerificationEmail(email, token) {
+  // --- Production Email Configuration ---
+
   let transporter = nodemailer.createTransport({
     service: 'gmail', 
     auth: {
@@ -244,7 +266,9 @@ async function sendVerificationEmail(email, token) {
     },
   });
 
+  // send mail with defined transport object
   let info = await transporter.sendMail({
+    // It's best practice for the 'from' address to match your authenticated user.
     from: '"Librico Library" <donaldmwanga33@gmail.com>', 
     to: email,
     subject: 'Verify Your Email',
@@ -253,6 +277,9 @@ async function sendVerificationEmail(email, token) {
   });
 
   console.log('Message sent: %s', info.messageId);
+  // The "Preview URL" is only for Ethereal. For real services, the email is sent directly.
+  // You can remove or comment out the line below.
+  // console.log('Preview URL: %s', nodemailer.getTestMessageUrl(info));
 }
 
 async function sendPasswordResetEmail(email, token) {
@@ -274,8 +301,10 @@ async function sendPasswordResetEmail(email, token) {
 }
 
 async function createVerificationToken(userId, email) {
+  // Generate a 6-digit numeric token that is easier for users to enter manually.
+  // crypto.randomInt is a secure way to generate random numbers.
   const token = crypto.randomInt(100000, 999999).toString();
-  const expires_at = new Date(Date.now() + 3600 * 1000);
+  const expires_at = new Date(Date.now() + 3600 * 1000); // 1 hour expiry
 
   await db('email_verifications').insert({
     user_id: userId,
@@ -286,13 +315,14 @@ async function createVerificationToken(userId, email) {
   await sendVerificationEmail(email, token);
 }
 
+// Register a new user (librarian)
 ipcMain.handle('register-user', async (event, { username, email, password }) => {
   try {
     const existingUser = await db('users').where({ email }).first();
     if (existingUser) {
       return { success: false, message: 'An account with this email already exists.' };
     }
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(password, 10); // Hash password with salt round 10
     const [userId] = await db('users').insert({ username, email, password: hashedPassword }).returning('id');
     await createVerificationToken(userId.id, email);
     return { success: true, message: 'User registered successfully.' };
@@ -302,10 +332,11 @@ ipcMain.handle('register-user', async (event, { username, email, password }) => 
   }
 });
 
+// Login a user
 ipcMain.handle('login-user', async (event, { email, password }) => {
   try {
     const user = await db('users').where({ email }).first();
-    if (!user) {
+    if (!user) { // User not found
       return { success: false, message: 'Invalid email or password.' };
     }
 
@@ -325,6 +356,7 @@ ipcMain.handle('login-user', async (event, { email, password }) => {
   }
 });
 
+// Verify an email token
 ipcMain.handle('verify-email', async (event, { token }) => {
   try {
     const verification = await db('email_verifications').where({ token }).first();
@@ -348,6 +380,7 @@ ipcMain.handle('verify-email', async (event, { token }) => {
   }
 });
 
+// Resend verification email
 ipcMain.handle('resend-verification', async (event, { email }) => {
   try {
     const user = await db('users').where({ email }).first();
@@ -365,16 +398,20 @@ ipcMain.handle('resend-verification', async (event, { email }) => {
   }
 });
 
+// Forgot Password - Send Token
 ipcMain.handle('forgot-password', async (event, { email }) => {
   try {
     const user = await db('users').where({ email }).first();
     if (!user) {
+      // For security, we generally don't want to reveal if an email exists, 
+      // but for this internal app, a helpful message is fine.
       return { success: true, message: 'If an account exists with this email, a reset token has been sent.' };
     }
 
     const token = crypto.randomInt(100000, 999999).toString();
-    const expires_at = new Date(Date.now() + 3600 * 1000);
+    const expires_at = new Date(Date.now() + 3600 * 1000); // 1 hour expiry
 
+    // Invalidate any existing reset tokens for this user
     await db('password_resets').where({ user_id: user.id }).del();
 
     await db('password_resets').insert({
@@ -391,18 +428,19 @@ ipcMain.handle('forgot-password', async (event, { email }) => {
   }
 });
 
+// Reset Password - Verify Token and Update Password
 ipcMain.handle('reset-password', async (event, { email, token, newPassword }) => {
   try {
     const user = await db('users').where({ email }).first();
     if (!user) return { success: false, message: 'Invalid request.' };
 
-    const resetRec = await db('password_resets').where({ user_id: user.id, token }).first();
-    if (!resetRec) return { success: false, message: 'Invalid token.' };
-    if (new Date() > new Date(resetRec.expires_at)) return { success: false, message: 'Token has expired.' };
+    const resetRecord = await db('password_resets').where({ user_id: user.id, token }).first();
+    if (!resetRecord) return { success: false, message: 'Invalid token.' };
+    if (new Date() > new Date(resetRecord.expires_at)) return { success: false, message: 'Token has expired.' };
 
-    const hashedPwd = await bcrypt.hash(newPassword, 10);
-    await db('users').where({ id: user.id }).update({ password: hashedPwd });
-    await db('password_resets').where({ id: resetRec.id }).del();
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await db('users').where({ id: user.id }).update({ password: hashedPassword });
+    await db('password_resets').where({ id: resetRecord.id }).del();
 
     return { success: true, message: 'Password reset successfully. You can now login.' };
   } catch (error) {
@@ -411,6 +449,7 @@ ipcMain.handle('reset-password', async (event, { email, token, newPassword }) =>
   }
 });
 
+// Update user profile
 ipcMain.handle('update-profile', async (event, { userId, username, password }) => {
   try {
     const updates = {};
@@ -430,8 +469,12 @@ ipcMain.handle('update-profile', async (event, { userId, username, password }) =
   }
 });
 
+// === Admin Panel IPC Handlers ===
+
+// Get all librarians
 ipcMain.handle('get-all-librarians', async () => {
   try {
+    // Select only non-sensitive data
     const librarians = await db('users').select('id', 'username', 'email', 'is_admin');
     return { success: true, librarians };
   } catch (error) {
@@ -440,6 +483,7 @@ ipcMain.handle('get-all-librarians', async () => {
   }
 });
 
+// Add a new librarian (admin action)
 ipcMain.handle('admin-add-librarian', async (event, { username, email, password, is_admin }) => {
   try {
     const existingUser = await db('users').where({ email }).first();
@@ -455,8 +499,10 @@ ipcMain.handle('admin-add-librarian', async (event, { username, email, password,
   }
 });
 
+// Remove a librarian (admin action)
 ipcMain.handle('admin-remove-librarian', async (event, { id }) => {
   try {
+    // As a safeguard, prevent the default admin (ID 1) from being deleted.
     if (id === 1) {
       return { success: false, message: 'Cannot remove the default admin account.' };
     }
@@ -468,9 +514,12 @@ ipcMain.handle('admin-remove-librarian', async (event, { id }) => {
   }
 });
 
+// === Settings & Licensing Handlers ===
+
 ipcMain.handle('get-settings', async () => {
   try {
     const rows = await db('settings').select('*');
+    // Convert array of {key, value} to object {key: value}
     const settings = rows.reduce((acc, row) => {
       acc[row.key] = row.value;
       return acc;
@@ -490,6 +539,7 @@ ipcMain.handle('update-settings', async (event, newSettings) => {
     await db.transaction(async trx => {
       for (const [key, value] of Object.entries(newSettings)) {
         await trx('settings').where({ key }).update({ value }).catch(async () => {
+            // If update fails (row doesn't exist), insert it
             await trx('settings').insert({ key, value });
         });
       }
@@ -501,27 +551,32 @@ ipcMain.handle('update-settings', async (event, newSettings) => {
   }
 });
 
-app.whenReady().then(async () => {
-  try {
-    const database = require('./database');
-    await database.setupDatabase();
-    db = database.getKnex();
-    console.log('[main.js] Database connection established.');
-
-    console.log('[main.js] Initializing window...');
-    createWindow();
-
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow();
-      }
-    });
-  } catch (error) {
-    console.error('FATAL: Failed to initialize application:', error);
-    app.quit();
+ipcMain.on('open-external-link', (event, url) => {
+  if (url.startsWith('mailto:') || url.startsWith('https:') || url.startsWith('http:')) {
+    shell.openExternal(url);
   }
 });
 
+// This method will be called when Electron has finished initialization
+app.whenReady().then(async () => {
+  // Initialize the database connection now that the app is ready
+  const database = require('./database');
+
+  // This function will now initialize knex and set up the entire schema.
+  await database.setupDatabase();
+  // Get the now-initialized instance for all IPC handlers to use.
+  db = database.getKnex();
+
+  createWindow();
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
+  });
+});
+
+// Quit when all windows are closed, except on macOS
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
