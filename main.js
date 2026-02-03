@@ -1,6 +1,7 @@
 // main.js
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs/promises');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
@@ -87,27 +88,35 @@ function validateLicense(licenseKey) {
 
 // Example: Get all books
 ipcMain.handle('get-books', async () => {
-  const books = await db('books').select('*');
-  
-  // Fetch active borrowed records
-  const borrowedRecords = await db('borrowed_records').where('returned', false).select('*');
-  
-  // Map records to books
-  const booksWithRecords = books.map(book => {
-    const records = borrowedRecords
-      .filter(r => r.book_id == book.id)
-      .map(r => ({
-        id: r.id,
-        studentName: r.student_name,
-        studentForm: r.student_form,
-        admissionNumber: r.admission_number,
-        borrowedDate: r.borrowed_date,
-        dueDate: r.due_date
-      }));
-    return { ...book, borrowed_records: records };
-  });
+  try {
+    const books = await db('books').select('*');
+    
+    const hasBorrowedRecords = await db.schema.hasTable('borrowed_records');
+    let borrowedRecords = [];
+    if (hasBorrowedRecords) {
+      borrowedRecords = await db('borrowed_records').where('returned', false).select('*');
+    }
+    
+    const booksWithRecords = books.map(book => {
+      const records = borrowedRecords
+        .filter(r => r.book_id == book.id)
+        .map(r => ({
+          id: r.id,
+          studentName: r.student_name,
+          studentForm: r.student_form,
+          admissionNumber: r.admission_number,
+          borrowedDate: r.borrowed_date,
+          dueDate: r.due_date,
+          copyNumber: r.copy_number
+        }));
+      return { ...book, borrowed_records: records };
+    });
 
-  return booksWithRecords;
+    return booksWithRecords;
+  } catch (error) {
+    console.error('Get books error:', error);
+    return []; // Return empty array on error to prevent frontend crash
+  }
 });
 
 // Example: Add a book
@@ -166,6 +175,13 @@ ipcMain.handle('borrow-book', async (event, { bookId, borrowDetails }) => {
     }
 
     const safeBookId = Number(bookId);
+
+    // Check if this specific copy is already borrowed
+    const existingCopy = await db('borrowed_records').where({ book_id: safeBookId, copy_number: borrowDetails.copyNumber, returned: false }).first();
+    if (existingCopy) {
+      return { success: false, message: `Copy #${borrowDetails.copyNumber} is already borrowed by ${existingCopy.student_name}.` };
+    }
+
     await db.transaction(async trx => {
       await trx('books').where('id', safeBookId).decrement('copies_available', 1);
       await trx('borrowed_records').insert({
@@ -175,6 +191,7 @@ ipcMain.handle('borrow-book', async (event, { bookId, borrowDetails }) => {
         admission_number: borrowDetails.admissionNumber,
         borrowed_date: borrowDetails.borrowedDate,
         due_date: borrowDetails.dueDate,
+        copy_number: borrowDetails.copyNumber,
         returned: false
       });
     });
@@ -323,8 +340,8 @@ ipcMain.handle('register-user', async (event, { username, email, password }) => 
       return { success: false, message: 'An account with this email already exists.' };
     }
     const hashedPassword = await bcrypt.hash(password, 10); // Hash password with salt round 10
-    const [userId] = await db('users').insert({ username, email, password: hashedPassword }).returning('id');
-    await createVerificationToken(userId.id, email);
+    const [id] = await db('users').insert({ username, email, password: hashedPassword });
+    await createVerificationToken(id, email);
     return { success: true, message: 'User registered successfully.' };
   } catch (error) {
     console.error('Registration error:', error);
@@ -500,14 +517,21 @@ ipcMain.handle('admin-add-librarian', async (event, { username, email, password,
 });
 
 // Remove a librarian (admin action)
-ipcMain.handle('admin-remove-librarian', async (event, { id }) => {
+ipcMain.handle('admin-remove-librarian', async (event, id) => {
   try {
+    // Handle case where id might be passed as an object or primitive
+    const librarianId = (typeof id === 'object' && id !== null) ? id.id : id;
+
+    if (!librarianId) {
+      return { success: false, message: 'Invalid librarian ID.' };
+    }
+
     // As a safeguard, prevent the default admin (ID 1) from being deleted.
-    if (id === 1) {
+    if (librarianId === 1) {
       return { success: false, message: 'Cannot remove the default admin account.' };
     }
-    await db('users').where({ id }).del();
-    return { success: true };
+    await db('users').where({ id: librarianId }).del();
+    return { success: true, message: 'Librarian removed successfully.' };
   } catch (error) {
     console.error('Admin remove librarian error:', error);
     return { success: false, message: 'Failed to remove librarian.' };
@@ -551,9 +575,233 @@ ipcMain.handle('update-settings', async (event, newSettings) => {
   }
 });
 
+// Show a native confirmation dialog that doesn't block the renderer
+ipcMain.handle('show-confirm-dialog', async (event, { title, message, detail }) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'question',
+    buttons: ['Yes', 'No'],
+    defaultId: 0,
+    cancelId: 1,
+    title: title || 'Confirm',
+    message: message || 'Are you sure?',
+    detail: detail || '',
+  });
+  return response === 0; // Returns true if 'Yes' was clicked
+});
+
 ipcMain.on('open-external-link', (event, url) => {
   if (url.startsWith('mailto:') || url.startsWith('https:') || url.startsWith('http:')) {
     shell.openExternal(url);
+  }
+});
+
+// Helper function to safely format a field for CSV
+function escapeCsvField(field) {
+  if (field === null || field === undefined) {
+    return '';
+  }
+  const str = String(field);
+  // If the field contains a comma, a quote, or a newline, wrap it in double quotes.
+  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+    // Escape existing double quotes by doubling them up.
+    const escapedStr = str.replace(/"/g, '""');
+    return `"${escapedStr}"`;
+  }
+  return str;
+}
+
+// === Data Export Handlers ===
+
+ipcMain.handle('export-books-csv', async () => {
+  try {
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: 'Export Books to CSV',
+      defaultPath: `librico-books-backup-${new Date().toISOString().split('T')[0]}.csv`,
+      filters: [{ name: 'CSV Files', extensions: ['csv'] }],
+    });
+
+    if (canceled || !filePath) {
+      return { success: false, message: 'Export cancelled.' };
+    }
+
+    const books = await db('books').select('*');
+    if (books.length === 0) {
+      return { success: false, message: 'No books to export.' };
+    }
+
+    const columns = Object.keys(books[0]);
+    const header = columns.join(',') + '\n';
+    const csvRows = books.map(book => columns.map(col => escapeCsvField(book[col])).join(',')).join('\n');
+
+    await fs.writeFile(filePath, header + csvRows);
+
+    return { success: true, message: `Successfully exported ${books.length} books.` };
+  } catch (error) {
+    console.error('Export books to CSV error:', error);
+    return { success: false, message: 'Failed to export books.' };
+  }
+});
+
+ipcMain.handle('export-borrow-records-csv', async () => {
+  try {
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: 'Export Borrow History to CSV',
+      defaultPath: `librico-borrow-history-backup-${new Date().toISOString().split('T')[0]}.csv`,
+      filters: [{ name: 'CSV Files', extensions: ['csv'] }],
+    });
+
+    if (canceled || !filePath) return { success: false, message: 'Export cancelled.' };
+
+    const records = await db('borrowed_records').select('*');
+    if (records.length === 0) return { success: false, message: 'No borrow records to export.' };
+
+    const columns = Object.keys(records[0]);
+    const header = columns.join(',') + '\n';
+    const csvRows = records.map(record => columns.map(col => escapeCsvField(record[col])).join(',')).join('\n');
+
+    await fs.writeFile(filePath, header + csvRows);
+    return { success: true, message: `Successfully exported ${records.length} records.` };
+  } catch (error) {
+    console.error('Export borrow records to CSV error:', error);
+    return { success: false, message: 'Failed to export borrow records.' };
+  }
+});
+
+// === Database Backup & Restore ===
+
+ipcMain.handle('backup-database', async () => {
+  try {
+    const dbPath = app.isPackaged
+      ? path.join(app.getPath('userData'), 'library.sqlite')
+      : path.join(__dirname, 'library.sqlite');
+
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: 'Backup Database',
+      defaultPath: `librico-backup-${new Date().toISOString().split('T')[0]}.sqlite`,
+      filters: [{ name: 'SQLite Database', extensions: ['sqlite'] }],
+    });
+
+    if (canceled || !filePath) {
+      return { success: false, message: 'Backup cancelled.' };
+    }
+
+    await fs.copyFile(dbPath, filePath);
+    return { success: true, message: 'Database backup created successfully.' };
+  } catch (error) {
+    console.error('Backup database error:', error);
+    return { success: false, message: 'Failed to create database backup.' };
+  }
+});
+
+ipcMain.handle('restore-database', async () => {
+  try {
+    const dbPath = app.isPackaged
+      ? path.join(app.getPath('userData'), 'library.sqlite')
+      : path.join(__dirname, 'library.sqlite');
+
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      title: 'Restore Database',
+      filters: [{ name: 'SQLite Database', extensions: ['sqlite'] }],
+      properties: ['openFile']
+    });
+
+    if (canceled || filePaths.length === 0) {
+      return { success: false, message: 'Restore cancelled.' };
+    }
+
+    // Close the database connection before overwriting the file
+    if (db) {
+      await db.destroy();
+      db = null;
+    }
+
+    await fs.copyFile(filePaths[0], dbPath);
+
+    // Re-initialize the database connection
+    // A full app restart is safer for database restores.
+    app.relaunch();
+    app.exit();
+
+    return { success: true, message: 'Database restored. Application is restarting...' };
+  } catch (error) {
+    console.error('Restore database error:', error);
+    return { success: false, message: 'Failed to restore database.' };
+  }
+});
+
+ipcMain.handle('import-books-csv', async () => {
+  try {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      title: 'Import Books from CSV',
+      filters: [{ name: 'CSV Files', extensions: ['csv'] }],
+      properties: ['openFile']
+    });
+
+    if (canceled || filePaths.length === 0) {
+      return { success: false, message: 'Import cancelled.' };
+    }
+
+    const fileContent = await fs.readFile(filePaths[0], 'utf-8');
+    const lines = fileContent.split(/\r?\n/).filter(line => line.trim() !== '');
+    
+    if (lines.length < 2) {
+      return { success: false, message: 'CSV file is empty or missing headers.' };
+    }
+
+    // Parse headers (assume first row)
+    const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
+    
+    const booksToInsert = [];
+    let skippedCount = 0;
+
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i];
+      // Split by comma, ignoring commas inside double quotes
+      const values = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(val => {
+        return val.trim().replace(/^"|"$/g, '').replace(/""/g, '"');
+      });
+
+      const book = { total_copies: 1, copies_available: 1 };
+
+      headers.forEach((header, index) => {
+        if (values[index] !== undefined) {
+          const val = values[index];
+          if (header.includes('title')) book.title = val;
+          else if (header.includes('author')) book.author = val;
+          else if (header.includes('isbn')) book.isbn = val;
+          else if (header.includes('copies')) {
+             const copies = parseInt(val);
+             if (!isNaN(copies)) { book.total_copies = copies; book.copies_available = copies; }
+          }
+          else if (header.includes('edition')) book.edition = val;
+          else if (header.includes('year')) book.publication_year = val;
+        }
+      });
+
+      if (book.title && book.author) {
+        booksToInsert.push(book);
+      } else {
+        skippedCount++;
+      }
+    }
+
+    if (booksToInsert.length > 0) {
+      // Insert in chunks to avoid SQLite limits
+      const chunkSize = 50;
+      for (let i = 0; i < booksToInsert.length; i += chunkSize) {
+        await db('books').insert(booksToInsert.slice(i, i + chunkSize));
+      }
+    }
+
+    return { 
+      success: true, 
+      message: `Successfully imported ${booksToInsert.length} books.${skippedCount > 0 ? ` Skipped ${skippedCount} invalid rows.` : ''}` 
+    };
+
+  } catch (error) {
+    console.error('Import books CSV error:', error);
+    return { success: false, message: 'Failed to import books.' };
   }
 });
 

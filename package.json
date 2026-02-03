@@ -48,7 +48,6 @@
         "portable"
       ],
       "icon": "build/icon.ico",
-      "cscLink": "librico-test-cert.pfx",
       "cscKeyPassword": "${env.CSC_KEY_PASSWORD}",
       "publish": [
         {

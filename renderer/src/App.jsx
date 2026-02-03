@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import './App.css';
 import libraryBackground1 from './assets/images/BackScreenshot1.png';
 import libraryBackground2 from './assets/images/BackScreenshot2.png';
@@ -16,11 +16,63 @@ const backgroundImages = [
   libraryBackground5,
 ];
 
+const printReceipt = (details) => {
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    document.body.appendChild(iframe);
+    
+    const doc = iframe.contentWindow.document;
+    doc.open();
+    doc.write(`
+        <html>
+          <head>
+            <title>Borrow Receipt</title>
+            <style>
+              body { font-family: 'Courier New', monospace; padding: 20px; max-width: 300px; margin: 0 auto; }
+              h2 { text-align: center; border-bottom: 1px dashed #000; padding-bottom: 10px; margin-bottom: 15px; }
+              .item { margin: 5px 0; display: flex; justify-content: space-between; }
+              .label { font-weight: bold; }
+              .footer { margin-top: 20px; text-align: center; font-size: 12px; border-top: 1px dashed #000; padding-top: 10px; }
+              @media print { body { margin: 0; } }
+            </style>
+          </head>
+          <body>
+            <h2>Librico Library</h2>
+            <div class="item"><span class="label">Date:</span> <span>${new Date().toLocaleDateString()}</span></div>
+            <div class="item"><span class="label">Time:</span> <span>${new Date().toLocaleTimeString()}</span></div>
+            <br/>
+            <div class="item"><span class="label">Student:</span> <span>${details.studentName}</span></div>
+            <div class="item"><span class="label">Adm No:</span> <span>${details.admissionNumber}</span></div>
+            <div class="item"><span class="label">Form:</span> <span>${details.studentForm}</span></div>
+            <hr style="border-top: 1px dashed #000; border-bottom: none;"/>
+            <div class="item" style="display:block; margin-bottom: 2px;"><span class="label">Book:</span></div>
+            <div class="item"><span class="label">Copy #:</span> <span>${details.copyNumber}</span></div>
+            <div style="margin-bottom: 10px;">${details.bookTitle}</div>
+            <div class="item"><span class="label">Due Date:</span> <span>${new Date(details.dueDate).toLocaleDateString()}</span></div>
+            <div class="footer">
+              Please return by the due date.<br/>
+              Thank you!
+            </div>
+          </body>
+        </html>
+    `);
+    doc.close();
+
+    iframe.contentWindow.focus();
+    iframe.contentWindow.print();
+    
+    // Clean up the iframe after printing
+    setTimeout(() => {
+      document.body.removeChild(iframe);
+    }, 1000);
+};
+
 function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
   const [studentName, setStudentName] = useState('');
   const [studentForm, setStudentForm] = useState('1');
   const [admissionNumber, setAdmissionNumber] = useState('');
   const [borrowedDate, setBorrowedDate] = useState('');
+  const [copyNumber, setCopyNumber] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -33,6 +85,9 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
   const [editIsbn, setEditIsbn] = useState('');
   const [borrowSuccess, setBorrowSuccess] = useState('');
   const [borrowError, setBorrowError] = useState('');
+  const [lastBorrowedDetails, setLastBorrowedDetails] = useState(null);
+  const [returnConfirmId, setReturnConfirmId] = useState(null);
+  const prevBookIdRef = useRef(null);
 
   // Helper to format a Date object into a string suitable for datetime-local input
   const toDateTimeLocal = (date) => {
@@ -44,12 +99,21 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
 
   useEffect(() => {
     if (book) {
-      const now = new Date();
-      const twoWeeksFromNow = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+      if (prevBookIdRef.current !== book.id) {
+        const now = new Date();
+        const twoWeeksFromNow = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
 
-      setBorrowedDate(toDateTimeLocal(now));
-      setDueDate(toDateTimeLocal(twoWeeksFromNow));
-      
+        setBorrowedDate(toDateTimeLocal(now));
+        setDueDate(toDateTimeLocal(twoWeeksFromNow));
+        
+        // Reset messages and state when opening a new book
+        setBorrowSuccess('');
+        setBorrowError('');
+        setLastBorrowedDetails(null);
+        setReturnConfirmId(null);
+        prevBookIdRef.current = book.id;
+      }
+
       // Initialize edit fields
       setEditTitle(book.title);
       setEditAuthor(book.author);
@@ -58,6 +122,8 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
       setEditEdition(book.edition || '');
       setEditPublicationYear(book.publication_year || '');
       setEditIsbn(book.isbn || '');
+    } else {
+      prevBookIdRef.current = null;
     }
   }, [book]);
 
@@ -105,7 +171,7 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
     setBorrowSuccess('');
     setBorrowError('');
 
-    if (!studentName || !admissionNumber || !borrowedDate || !dueDate) {
+    if (!studentName || !admissionNumber || !borrowedDate || !dueDate || !copyNumber) {
       setBorrowError('Please fill in all student details and dates.');
       return;
     }
@@ -116,17 +182,19 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
         studentName,
         studentForm,
         admissionNumber,
+        copyNumber,
         borrowedDate: new Date(borrowedDate).toISOString(),
         dueDate: new Date(dueDate).toISOString(),
       };
       await onBorrow(book.id, borrowDetails);
       // If onBorrow doesn't throw, it was successful.
       setBorrowSuccess('Book borrowed successfully!');
+      setLastBorrowedDetails({ ...borrowDetails, bookTitle: book.title, bookAuthor: book.author });
       // Clear form for the next entry
       setStudentName('');
       setAdmissionNumber('');
       setStudentForm('1');
-      setTimeout(() => setBorrowSuccess(''), 3000);
+      setCopyNumber('');
     } catch (error) {
       console.error("Error processing borrow details:", error);
       setBorrowError(`An error occurred while borrowing the book: ${error.message}`);
@@ -201,7 +269,18 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
         {!isEditing && book.copies_available > 0 && (
           <div className="borrow-section">
             <h3>Borrow a Copy</h3>
-            {borrowSuccess && <p className="auth-success">{borrowSuccess}</p>}
+            {borrowSuccess && (
+              <div style={{marginTop: '10px', marginBottom: '10px'}}>
+                <p className="auth-success">{borrowSuccess}</p>
+                {lastBorrowedDetails && (
+                  <button type="button" className="secondary small-btn" onClick={() => {
+                    printReceipt(lastBorrowedDetails);
+                    setBorrowSuccess(''); // Clear message after printing
+                    setLastBorrowedDetails(null);
+                  }}>Print Receipt</button>
+                )}
+              </div>
+            )}
             {borrowError && <p className="auth-error">{borrowError}</p>}
             <form onSubmit={handleBorrowSubmit} className="borrow-form">
               <input
@@ -224,6 +303,14 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
                 <option value="3">Form 3</option>
                 <option value="4">Form 4</option>
               </select>
+              <label>Copy Identifier (e.g., 1, 2, A, B)</label>
+              <input
+                type="text"
+                value={copyNumber}
+                onChange={(e) => setCopyNumber(e.target.value)}
+                placeholder="Enter Copy Number / Accession Code"
+                required
+              />
               <label>Borrow Date & Time</label>
               <input
                 type="datetime-local"
@@ -253,15 +340,18 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
               {book.borrowed_records.map(record => (
                 <li key={record.id}>
                   <span>
-                    {record.studentName} (Adm: {record.admissionNumber}, Form: {record.studentForm})
+                    <strong>Copy #{record.copyNumber || '?'}</strong> - {record.studentName} (Adm: {record.admissionNumber})
                     <br />
                     <small>Due: {new Date(record.dueDate).toLocaleString()}</small>
                   </span>
-                  <button onClick={() => {
-                    if (window.confirm('Are you sure you want to return this book?')) {
-                      onReturn(book.id, record.id);
-                    }
-                  }}>Return</button>
+                  {returnConfirmId === record.id ? (
+                    <div style={{display: 'flex', gap: '5px'}}>
+                      <button className="danger small-btn" onClick={() => onReturn(book.id, record.id)}>Confirm</button>
+                      <button className="secondary small-btn" onClick={() => setReturnConfirmId(null)}>Cancel</button>
+                    </div>
+                  ) : (
+                    <button onClick={() => setReturnConfirmId(record.id)}>Return</button>
+                  )}
                 </li>
               ))}
             </ul>
@@ -283,6 +373,7 @@ function AdminPanel() {
   const [isNewAdmin, setIsNewAdmin] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [exportMessage, setExportMessage] = useState('');
 
   const { api } = window;
 
@@ -302,6 +393,7 @@ function AdminPanel() {
   const clearMessages = () => {
     setError('');
     setSuccess('');
+    setExportMessage('');
   };
 
   const handleAddLibrarian = async (e) => {
@@ -335,6 +427,8 @@ function AdminPanel() {
     if (!window.confirm('Are you sure you want to remove this librarian? This action cannot be undone.')) {
       return;
     }
+    // Fix for focus issue after window.confirm in Electron
+    window.focus();
     const result = await api.adminRemoveLibrarian({ id: librarianId });
     if (result.success) {
       setSuccess('Librarian removed successfully!');
@@ -342,6 +436,50 @@ function AdminPanel() {
     } else {
       setError(result.message || 'Failed to remove librarian.');
     }
+  };
+
+  const handleExportBooks = async () => {
+    clearMessages();
+    setExportMessage('Exporting books...');
+    const result = await api.exportBooksToCsv();
+    if (result.success) {
+      setExportMessage(result.message);
+    } else {
+      setExportMessage(`Export failed: ${result.message}`);
+    }
+  };
+
+  const handleExportBorrowHistory = async () => {
+    clearMessages();
+    setExportMessage('Exporting borrow history...');
+    const result = await api.exportBorrowRecordsToCsv();
+    if (result.success) {
+      setExportMessage(result.message);
+    } else {
+      setExportMessage(`Export failed: ${result.message}`);
+    }
+  };
+
+  const handleBackupDatabase = async () => {
+    clearMessages();
+    setExportMessage('Creating backup...');
+    const result = await api.backupDatabase();
+    if (result.success) {
+      setExportMessage(result.message);
+    } else {
+      setExportMessage(`Backup failed: ${result.message}`);
+    }
+  };
+
+  const handleRestoreDatabase = async () => {
+    clearMessages();
+    if (!window.confirm('WARNING: Restoring a database will overwrite all current data. This action cannot be undone. The application will restart automatically. Continue?')) {
+      return;
+    }
+    setExportMessage('Restoring database...');
+    const result = await api.restoreDatabase();
+    // If successful, app restarts, so we might not see this message.
+    if (!result.success) setExportMessage(`Restore failed: ${result.message}`);
   };
 
   return (
@@ -353,14 +491,32 @@ function AdminPanel() {
       <div className="librarian-list">
         <h3>Current Librarians</h3>
         {librarians.map((lib) => (
-          <div key={lib.id} className="book-item">
-            <p>
-              <strong>{lib.username}</strong> ({lib.email})
-              {lib.is_admin && <span className="admin-badge">Admin</span>}
-            </p>
+          <div key={lib.id} className="list-item">
+            <div className="list-content">
+              <h4>{lib.username} {lib.is_admin && <span className="admin-badge">Admin</span>}</h4>
+              <p>{lib.email}</p>
+            </div>
             <button onClick={() => handleRemoveLibrarian(lib.id)} className="remove-btn">Remove</button>
           </div>
         ))}
+      </div>
+
+      <hr />
+
+      <div className="data-management-section">
+        <h3>Data Management</h3>
+        <p>Manage your library data. Export to CSV for reporting, or backup the entire database file for safety.</p>
+        <div className="actions" style={{ justifyContent: 'flex-start', gap: '10px' }}>
+          <button onClick={handleExportBooks} className="secondary">Export Books</button>
+          <button onClick={handleExportBorrowHistory} className="secondary">Export Borrow History</button>
+          <button onClick={handleBackupDatabase} className="primary">Backup Database</button>
+          <button onClick={handleRestoreDatabase} className="danger" style={{backgroundColor: '#dc3545', borderColor: '#dc3545', color: 'white'}}>Restore Database</button>
+        </div>
+        {exportMessage && (
+          <p style={{ marginTop: '10px', fontStyle: 'italic', color: exportMessage.startsWith('Export failed') ? 'var(--color-danger)' : 'var(--text-muted)' }}>
+            {exportMessage}
+          </p>
+        )}
       </div>
 
       <hr />
@@ -483,6 +639,22 @@ function BorrowingTrendsChart({ data }) {
   );
 }
 
+const playScanSound = () => {
+  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  const oscillator = audioContext.createOscillator();
+  const gainNode = audioContext.createGain();
+
+  oscillator.connect(gainNode);
+  gainNode.connect(audioContext.destination);
+
+  oscillator.type = 'sine';
+  oscillator.frequency.setValueAtTime(1000, audioContext.currentTime);
+  gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+
+  oscillator.start();
+  oscillator.stop(audioContext.currentTime + 0.1);
+};
+
 function MainScreen({ user, onLogout, onUserUpdate }) {
   const [books, setBooks] = useState([]);
   const [title, setTitle] = useState('');
@@ -493,7 +665,6 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
   const [publicationYear, setPublicationYear] = useState('');
   const [isbn, setIsbn] = useState('');
   const [qrInput, setQrInput] = useState('');
-  const [scanning, setScanning] = useState(false);
   const [selectedBook, setSelectedBook] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'inventory', 'admin'
   const [searchTerm, setSearchTerm] = useState('');
@@ -503,6 +674,7 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
   const [currentPage, setCurrentPage] = useState(1);
   const [overdueBooks, setOverdueBooks] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [importMessage, setImportMessage] = useState('');
   const itemsPerPage = 8;
 
   // The 'api' object is available globally
@@ -565,6 +737,20 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
       setCoverImage('');
     });
  };
+
+ const handleImportBooks = async () => {
+    setImportMessage('Importing books...');
+    const result = await api.importBooksFromCsv();
+    if (result.success) {
+      setImportMessage(result.message);
+      // Refresh book list on successful import
+      api.getBooks().then((fetchedBooks) => {
+        setBooks(fetchedBooks);
+      });
+    } else {
+      setImportMessage(`Import failed: ${result.message}`);
+    }
+  };
 
  const handleUpdateBook = async (updatedBook) => {
     const result = await api.updateBook(updatedBook);
@@ -668,9 +854,15 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
   const handleQrScan = (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
+      playScanSound();
+      const value = e.target.value; // Use target value for reliability with fast USB scanners
+      
+      // Clear the input field immediately to indicate success and prepare for the next scan
+      setQrInput('');
+
       try {
         // Try parsing as JSON first (e.g. {"title":"...", "isbn":"..."})
-        const data = JSON.parse(qrInput);
+        const data = JSON.parse(value);
         if (data.title) setTitle(data.title);
         if (data.author) setAuthor(data.author);
         if (data.edition) setEdition(data.edition);
@@ -678,13 +870,9 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
         if (data.isbn) setIsbn(data.isbn);
       } catch (err) {
         // If not JSON, assume it's just an ISBN/ID scan
-        setIsbn(qrInput);
+        setIsbn(value);
       }
     }
-  };
-
-  const startScan = () => {
-    setScanning(true);
   };
 
   return (
@@ -765,13 +953,13 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
             {mostBorrowedBooks.length > 0 ? (
               <ul className="most-borrowed-list">
                 {mostBorrowedBooks.map((book, index) => (
-                  <li key={index}>
+                  <li key={index} className="list-item">
                     <span className="rank">#{index + 1}</span>
-                    <div className="book-info">
+                    <div className="list-content">
                       <h4>{book.title}</h4>
                       <p>{book.author}</p>
                     </div>
-                    <span className="count">{book.count} borrows</span>
+                    <span className="count-badge">{book.count} borrows</span>
                   </li>
                 ))}
               </ul>
@@ -782,12 +970,13 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
 
           <div className="section-card">
             <h3>Add New Book</h3>
-            <button onClick={startScan} disabled={scanning}>
-                {scanning ? 'Scanning...' : 'Start QR Scan'}
-            </button>
-            {scanning && (
-                <p>scanning enabled</p>
-            )}
+            <div className="data-import-section" style={{marginBottom: '20px', paddingBottom: '20px', borderBottom: '1px solid #eee'}}>
+              <p style={{margin: '0 0 10px 0'}}>Quickly add multiple books by importing a CSV file.</p>
+              <button onClick={handleImportBooks} className="secondary">Import Books from CSV</button>
+              {importMessage && <p style={{ marginTop: '10px', fontStyle: 'italic', color: importMessage.startsWith('Import failed') ? 'var(--color-danger)' : 'var(--text-muted)' }}>{importMessage}</p>}
+            </div>
+
+            <h4 style={{marginTop: '20px'}}>Add a Single Book</h4>
             <div className="qr-scan-wrapper" style={{ marginBottom: '15px' }}>
               <input
                 type="text"
@@ -892,10 +1081,12 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
                   ) : (
                     <div className="book-icon">📖</div>
                   )}
-                  <h3>{book.title}</h3>
-                  <p className="book-author">by {book.author}</p>
-                  <div className={`status-badge ${book.copies_available > 0 ? 'available' : 'out'}`}>
-                    {book.copies_available > 0 ? `${book.copies_available} Available` : 'Out of Stock'}
+                  <div className="book-card-content">
+                    <h3>{book.title}</h3>
+                    <p className="book-author">by {book.author}</p>
+                    <div className={`status-badge ${book.copies_available > 0 ? 'available' : 'out'}`}>
+                      {book.copies_available > 0 ? `${book.copies_available} Available` : 'Out of Stock'}
+                    </div>
                   </div>
                 </div>
               ))
@@ -985,9 +1176,60 @@ const BellIcon = () => (
   </svg>
 );
 
+function TermsOfServiceModal({ onClose }) {
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{maxWidth: '600px'}}>
+        <button onClick={onClose} className="modal-close-btn">&times;</button>
+        <h2>Librico Terms of Service</h2>
+        <div style={{maxHeight: '400px', overflowY: 'auto', paddingRight: '15px', textAlign: 'left', fontSize: '0.9rem'}}>
+          <p><strong>Last Updated: {new Date().toLocaleDateString()}</strong></p>
+          <p>Welcome to Librico! By using our library management software, you agree to these terms. Please read them carefully.</p>
+          
+          <h4>1. Your Data & Privacy</h4>
+          <p>We believe in data privacy and ownership. All library data, including book records and student borrowing history, is stored locally on your school's computer in the <code>library.sqlite</code> file. We, the developers of Librico, do not have access to this data. It is your school's responsibility to secure and back up this file.</p>
+
+          <h4>2. Software License</h4>
+          <p>Librico is licensed, not sold. Your license grants you the right to use the software for one year. An active license is required to access core features like borrowing books. When your license expires, the software will enter a "Read-Only" mode, allowing you to view records and return books, but not to check out new ones. You can renew your license at any time.</p>
+
+          <h4>3. Acceptable Use</h4>
+          <p>You agree to use Librico solely for the purpose of managing your school's library resources. You will not attempt to reverse-engineer, decompile, or modify the software. You are responsible for all activity that occurs under your user account.</p>
+
+          <h4>4. Limitation of Liability</h4>
+          <p>Librico is provided "as is," without warranty of any kind. While we strive to create robust and reliable software, we are not liable for any data loss or damages that may occur from its use. We strongly recommend regular backups of your library database file.</p>
+
+          <h4>5. Support</h4>
+          <p>An active license includes access to our support team for technical assistance and bug fixes. We are committed to helping you have a smooth experience.</p>
+
+          <h4>6. Privacy Policy</h4>
+          <p>This Privacy Policy describes how Librico collects, uses, and protects your information.</p>
+          <ul>
+            <li><strong>Data Collection:</strong> Librico is designed as an offline-first application. We do not collect, transmit, or store your library's operational data (books, students, loans) on our servers. All such data resides locally on your device.</li>
+            <li><strong>Account Information:</strong> We may collect basic account information (such as email address and school name) solely for the purpose of license management and support communication.</li>
+            <li><strong>Data Security:</strong> Since data is stored locally, you are responsible for implementing appropriate security measures on the device running the software.</li>
+            <li><strong>Updates:</strong> We may update this policy from time to time. Continued use of the software constitutes acceptance of any changes.</li>
+          </ul>
+
+          <p>By checking the "I agree" box, you acknowledge that you have read, understood, and agree to be bound by these Terms of Service.</p>
+        </div>
+        <div className="actions" style={{marginTop: '20px'}}>
+            <button className="primary" onClick={onClose}>I Understand</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const SupportIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+    <path d="M8 1a5 5 0 0 0-5 5v1h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a6 6 0 1 1 12 0v6a2.5 2.5 0 0 1-2.5 2.5H9.366a1 1 0 0 1-.866.5h-1a1 1 0 1 1 0-2h1a1 1 0 0 1 .866.5H11.5A1.5 1.5 0 0 0 13 12h-1a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h1V6a5 5 0 0 0-5-5z"/>
+  </svg>
+);
+
 function LoginScreen({ onLoginSuccess, onNavigate }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const emailRef = useRef(null);
@@ -998,6 +1240,11 @@ function LoginScreen({ onLoginSuccess, onNavigate }) {
     setError('');
     const result = await api.loginUser({ email, password });
     if (result.success) {
+      if (rememberMe) {
+        localStorage.setItem('rememberedEmail', email);
+      } else {
+        localStorage.removeItem('rememberedEmail');
+      }
       onLoginSuccess(result.user);
     } else {
       setError(result.message);
@@ -1009,8 +1256,12 @@ function LoginScreen({ onLoginSuccess, onNavigate }) {
   };
 
   useEffect(() => {
-    if (emailRef.current) {
-      emailRef.current.focus();
+    const savedEmail = localStorage.getItem('rememberedEmail');
+    if (savedEmail) {
+      setEmail(savedEmail);
+      setRememberMe(true);
+    } else if (emailRef.current) {
+       emailRef.current.focus();
     }
   }, []);
 
@@ -1047,6 +1298,16 @@ function LoginScreen({ onLoginSuccess, onNavigate }) {
             </button>
           </div>
         </div>
+        <div className="form-group" style={{flexDirection: 'row', alignItems: 'center', gap: '8px', marginTop: '10px', marginBottom: '10px'}}>
+            <input 
+                id="rememberMe" 
+                type="checkbox" 
+                checked={rememberMe} 
+                onChange={(e) => setRememberMe(e.target.checked)}
+                style={{width: 'auto', margin: 0, cursor: 'pointer'}}
+            />
+            <label htmlFor="rememberMe" style={{margin: 0, cursor: 'pointer', fontSize: '0.9rem', color: '#555'}}>Remember Me</label>
+        </div>
         <div className="actions">
           <button type="submit" className="primary">Login</button>
           <button type="button" className="secondary" onClick={() => onNavigate('register')}>Need an account?</button>
@@ -1054,10 +1315,31 @@ function LoginScreen({ onLoginSuccess, onNavigate }) {
         <div style={{textAlign: 'center', marginTop: '10px'}}>
             <button type="button" className="link-btn" onClick={() => onNavigate('forgot-password')}>Forgot Password?</button>
         </div>
-        <div className="auth-footer" style={{ display: 'flex', justifyContent: 'center', gap: '20px', alignItems: 'center' }}>
-          <button type="button" className="link-btn" onClick={() => onNavigate('welcome')}>Back to Welcome</button>
-          <button type="button" className="link-btn" onClick={() => window.api.openExternalLink('mailto:donaldmwanga33@gmail.com?subject=Librico Support Request')}>
-            Contact Support
+        <div className="auth-footer" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '15px', marginTop: '25px', borderTop: '1px solid #eee', paddingTop: '20px' }}>
+          <button type="button" className="link-btn" onClick={() => onNavigate('welcome')} style={{color: '#888', fontSize: '0.9rem'}}>
+            ← Back to Welcome
+          </button>
+          <button 
+            type="button" 
+            onClick={() => window.api.openExternalLink('mailto:donaldmwanga33@gmail.com?subject=Librico Support Request')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '10px 20px',
+              backgroundColor: '#f0f9ff',
+              color: '#0284c7',
+              border: '1px solid #bae6fd',
+              borderRadius: '30px',
+              cursor: 'pointer',
+              fontSize: '0.9rem',
+              fontWeight: '500',
+              transition: 'all 0.2s ease'
+            }}
+            onMouseOver={(e) => { e.currentTarget.style.backgroundColor = '#e0f2fe'; e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 2px 5px rgba(0,0,0,0.05)'; }}
+            onMouseOut={(e) => { e.currentTarget.style.backgroundColor = '#f0f9ff'; e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = 'none'; }}
+          >
+            <SupportIcon /> Contact Support Team
           </button>
         </div>
       </form>
@@ -1069,9 +1351,11 @@ function RegisterScreen({ onNavigate, setInitialEmailForVerification }) {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [showTermsModal, setShowTermsModal] = useState(false);
   const usernameRef = useRef(null);
   const { api } = window;
 
@@ -1081,6 +1365,10 @@ function RegisterScreen({ onNavigate, setInitialEmailForVerification }) {
     setMessage('');
     if (password.length < 6) {
       setError('Password must be at least 6 characters long.');
+      return;
+    }
+    if (!agreedToTerms) {
+      setError('You must agree to the Terms of Service to register.');
       return;
     }
     const result = await api.registerUser({ username, email, password });
@@ -1139,19 +1427,51 @@ function RegisterScreen({ onNavigate, setInitialEmailForVerification }) {
             </button>
           </div>
         </div>
+        <div className="form-group" style={{flexDirection: 'row', alignItems: 'center', gap: '8px', marginTop: '10px', marginBottom: '20px'}}>
+          <input 
+              id="terms" 
+              type="checkbox" 
+              checked={agreedToTerms} 
+              onChange={(e) => setAgreedToTerms(e.target.checked)}
+              style={{width: 'auto', margin: 0, cursor: 'pointer'}}
+          />
+          <label htmlFor="terms" style={{margin: 0, cursor: 'pointer', fontSize: '0.9rem', color: '#555'}}>I agree to the <a href="#" onClick={(e) => {e.preventDefault(); setShowTermsModal(true);}}>Terms of Service</a></label>
+        </div>
         {error && <p className="auth-error">{error}</p>}
         {message && <p className="auth-success">{message}</p>}
         <div className="actions">
           <button type="submit" className="primary">Register</button>
           <button type="button" className="secondary" onClick={() => onNavigate('login')}>Login</button>
         </div>
-        <div className="auth-footer" style={{ display: 'flex', justifyContent: 'center', gap: '20px', alignItems: 'center' }}>
-          <button type="button" className="link-btn" onClick={() => onNavigate('welcome')}>Back to Welcome</button>
-          <button type="button" className="link-btn" onClick={() => window.api.openExternalLink('mailto:donaldmwanga33@gmail.com?subject=Librico Support Request')}>
-            Contact Support
+        <div className="auth-footer" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '15px', marginTop: '25px', borderTop: '1px solid #eee', paddingTop: '20px' }}>
+          <button type="button" className="link-btn" onClick={() => onNavigate('welcome')} style={{color: '#888', fontSize: '0.9rem'}}>
+            ← Back to Welcome
+          </button>
+          <button 
+            type="button" 
+            onClick={() => window.api.openExternalLink('mailto:donaldmwanga33@gmail.com?subject=Librico Support Request')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '10px 20px',
+              backgroundColor: '#f0f9ff',
+              color: '#0284c7',
+              border: '1px solid #bae6fd',
+              borderRadius: '30px',
+              cursor: 'pointer',
+              fontSize: '0.9rem',
+              fontWeight: '500',
+              transition: 'all 0.2s ease'
+            }}
+            onMouseOver={(e) => { e.currentTarget.style.backgroundColor = '#e0f2fe'; e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 2px 5px rgba(0,0,0,0.05)'; }}
+            onMouseOut={(e) => { e.currentTarget.style.backgroundColor = '#f0f9ff'; e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = 'none'; }}
+          >
+            <SupportIcon /> Contact Support Team
           </button>
         </div>
       </form>
+      {showTermsModal && <TermsOfServiceModal onClose={() => setShowTermsModal(false)} />}
     </div>
   );
 }
@@ -1209,8 +1529,10 @@ function VerifyEmailScreen({ onNavigate, initialEmail }) {
         <hr />
         <p>Didn't receive an email?</p>
         <input type="email" placeholder="Enter your email to resend" value={emailForResend} onChange={(e) => setEmailForResend(e.target.value)} required />
-        <button className="link-btn" onClick={() => onNavigate('login')}>Back to Login</button>
-        <button onClick={handleResend} className="link-btn">Resend verification email</button>
+        <div className="actions">
+          <button type="button" className="secondary" onClick={() => onNavigate('login')}>Back to Login</button>
+          <button type="button" className="primary" onClick={handleResend}>Resend Email</button>
+        </div>
       </div>
     </div>
   );

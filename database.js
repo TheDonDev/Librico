@@ -137,6 +137,12 @@ async function setupDatabase() {
     });
   }
 
+  // Ensure borrowed_records has copy_number column
+  const hasCopyNumber = await knex.schema.hasColumn('borrowed_records', 'copy_number');
+  if (!hasCopyNumber) {
+    await knex.schema.table('borrowed_records', (table) => table.string('copy_number'));
+  }
+
   // Ensure password_resets table exists
   const passwordResetsTableExists = await knex.schema.hasTable('password_resets');
   if (!passwordResetsTableExists) {

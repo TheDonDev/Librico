@@ -28,4 +28,13 @@ contextBridge.exposeInMainWorld('api', {
   getSettings: () => ipcRenderer.invoke('get-settings'),
   updateSettings: (settings) => ipcRenderer.invoke('update-settings', settings),
   openExternalLink: (url) => ipcRenderer.send('open-external-link', url),
+  // Dialogs
+  showConfirmDialog: (options) => ipcRenderer.invoke('show-confirm-dialog', options),
+  // Data Export
+  exportBooksToCsv: () => ipcRenderer.invoke('export-books-csv'),
+  exportBorrowRecordsToCsv: () => ipcRenderer.invoke('export-borrow-records-csv'),
+  importBooksFromCsv: () => ipcRenderer.invoke('import-books-csv'),
+  // Database Backup/Restore
+  backupDatabase: () => ipcRenderer.invoke('backup-database'),
+  restoreDatabase: () => ipcRenderer.invoke('restore-database'),
 });
