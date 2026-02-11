@@ -5,22 +5,23 @@ const nodemailer = require('nodemailer');
 // MUST match the secret in main.js
 const LICENSE_SECRET = 'your-super-secret-key-librico-2024'; 
 
-function generateLicense(schoolName, expiryDate) {
-  // Validate date format
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) {
-    throw new Error('Expiry date must be in YYYY-MM-DD format.');
-  }
+function generateLicense(schoolName) {
+  // Generate expiry date for one year from now
+  const now = new Date();
+  now.setFullYear(now.getFullYear() + 1);
+  const expiryDate = now.toISOString().split('T')[0]; // Format: YYYY-MM-DD
 
   const data = JSON.stringify({ 
     school: schoolName, 
-    expiry: expiryDate // Format: YYYY-MM-DD
+    expiry: expiryDate
   });
   
   // Create signature
   const signature = crypto.createHmac('sha256', LICENSE_SECRET).update(data).digest('hex');
   
   // Combine data and signature, then encode to Base64
-  return Buffer.from(`${data}|${signature}`).toString('base64');
+  const licenseKey = Buffer.from(`${data}|${signature}`).toString('base64');
+  return { licenseKey, expiryDate };
 }
 
 async function sendLicenseEmail(schoolName, email, licenseKey, expiryDate) {
@@ -56,25 +57,25 @@ async function sendLicenseEmail(schoolName, email, licenseKey, expiryDate) {
 // --- Command-Line Interface ---
 const args = process.argv.slice(2);
 
-if (args.length < 2) {
+if (args.length < 1) {
   const scriptName = path.basename(process.argv[1]);
-  console.error(`\nUsage: node ${scriptName} "School Name" YYYY-MM-DD [Email]`);
-  console.error(`Example: node ${scriptName} "Mundika High School" 2026-12-31 "client@school.com"\n`);
+  console.error(`\nUsage: node ${scriptName} "School Name" [Email]`);
+  console.error(`Example: node ${scriptName} "Mundika High School" "client@school.com"\n`);
   process.exit(1);
 }
 
-const [schoolName, expiryDate, email] = args;
+const [schoolName, email] = args;
 
 try {
-  const key = generateLicense(schoolName, expiryDate);
+  const { licenseKey, expiryDate } = generateLicense(schoolName);
   console.log('--- GENERATED LICENSE KEY ---');
-  console.log(key);
+  console.log(licenseKey);
   console.log('-----------------------------');
   console.log(`Licensed To: ${schoolName}`);
   console.log(`Expires On: ${expiryDate}`);
 
   if (email) {
-    sendLicenseEmail(schoolName, email, key, expiryDate).catch(err => {
+    sendLicenseEmail(schoolName, email, licenseKey, expiryDate).catch(err => {
       console.error('❌ Failed to send email:', err);
     });
   }
