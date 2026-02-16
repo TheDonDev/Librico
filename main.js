@@ -192,6 +192,7 @@ ipcMain.handle('borrow-book', async (event, { bookId, borrowDetails }) => {
         borrowed_date: borrowDetails.borrowedDate,
         due_date: borrowDetails.dueDate,
         copy_number: borrowDetails.copyNumber,
+        member_id: borrowDetails.memberId || null, // Link to member if provided
         returned: false
       });
     });
@@ -207,12 +208,25 @@ ipcMain.handle('return-book', async (event, { bookId, recordId }) => {
   try {
     await db.transaction(async trx => {
       await trx('books').where('id', bookId).increment('copies_available', 1);
-      await trx('borrowed_records').where('id', recordId).update({ returned: true });
+      await trx('borrowed_records').where('id', recordId).update({ returned: true, status: 'returned' });
     });
     return { success: true };
   } catch (error) {
     console.error('Return book error:', error);
     return { success: false, message: 'Failed to return book.' };
+  }
+});
+
+// Mark a book as lost
+ipcMain.handle('mark-book-lost', async (event, { bookId, recordId }) => {
+  try {
+    // When lost, we don't increment copies_available because the book is gone.
+    // We just update the status.
+    await db('borrowed_records').where('id', recordId).update({ status: 'lost', returned: false });
+    return { success: true };
+  } catch (error) {
+    console.error('Mark lost book error:', error);
+    return { success: false, message: 'Failed to mark book as lost.' };
   }
 });
 
@@ -483,6 +497,90 @@ ipcMain.handle('update-profile', async (event, { userId, username, password }) =
   } catch (error) {
     console.error('Update profile error:', error);
     return { success: false, message: 'Failed to update profile.' };
+  }
+});
+
+// === Members Management Handlers ===
+
+// Add a new member (Student or Teacher)
+ipcMain.handle('add-member', async (event, member) => {
+  try {
+    const existing = await db('members').where({ identifier: member.identifier }).first();
+    if (existing) {
+      return { success: false, message: `A member with ID ${member.identifier} already exists.` };
+    }
+    const [id] = await db('members').insert(member);
+    return { success: true, id };
+  } catch (error) {
+    console.error('Add member error:', error);
+    return { success: false, message: 'Failed to add member.' };
+  }
+});
+
+// Get members (with optional search)
+ipcMain.handle('get-members', async (event, searchTerm) => {
+  try {
+    let query = db('members').select('*');
+    if (searchTerm) {
+      query = query.where('name', 'like', `%${searchTerm}%`)
+                   .orWhere('identifier', 'like', `%${searchTerm}%`);
+    }
+    const members = await query;
+    return { success: true, members };
+  } catch (error) {
+    console.error('Get members error:', error);
+    return { success: false, message: 'Failed to fetch members.' };
+  }
+});
+
+// Get member details including borrowing history
+ipcMain.handle('get-member-details', async (event, memberId) => {
+  try {
+    const member = await db('members').where({ id: memberId }).first();
+    if (!member) return { success: false, message: 'Member not found' };
+
+    const history = await db('borrowed_records')
+      .join('books', 'borrowed_records.book_id', 'books.id')
+      .where('borrowed_records.member_id', memberId)
+      .select(
+        'borrowed_records.id as recordId',
+        'borrowed_records.borrowed_date',
+        'borrowed_records.due_date',
+        'borrowed_records.returned',
+        'borrowed_records.status',
+        'borrowed_records.copy_number',
+        'books.title',
+        'books.author',
+        'books.id as bookId'
+      )
+      .orderBy('borrowed_records.borrowed_date', 'desc');
+
+    return { success: true, member, history };
+  } catch (error) {
+    console.error('Get member details error:', error);
+    return { success: false, message: 'Failed to fetch member details.' };
+  }
+});
+
+// Get ALL currently borrowed books with borrower info
+ipcMain.handle('get-all-borrowed-items', async () => {
+  try {
+    const records = await db('borrowed_records')
+      .join('books', 'borrowed_records.book_id', 'books.id')
+      .leftJoin('members', 'borrowed_records.member_id', 'members.id')
+      .where('borrowed_records.returned', false)
+      .select(
+        'borrowed_records.*',
+        'books.title',
+        'books.author',
+        'members.name as member_name',
+        'members.identifier as member_identifier',
+        'members.type as member_type'
+      );
+    return { success: true, records };
+  } catch (error) {
+    console.error('Get all borrowed items error:', error);
+    return { success: false, message: 'Failed to fetch borrowed items.' };
   }
 });
 

@@ -74,6 +74,7 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
   const [borrowedDate, setBorrowedDate] = useState('');
   const [copyNumber, setCopyNumber] = useState('');
   const [dueDate, setDueDate] = useState('');
+  const [selectedMember, setSelectedMember] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState('');
@@ -88,6 +89,9 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
   const [lastBorrowedDetails, setLastBorrowedDetails] = useState(null);
   const [returnConfirmId, setReturnConfirmId] = useState(null);
   const prevBookIdRef = useRef(null);
+  
+  const [memberSearch, setMemberSearch] = useState('');
+  const [memberSearchResults, setMemberSearchResults] = useState([]);
 
   // Helper to format a Date object into a string suitable for datetime-local input
   const toDateTimeLocal = (date) => {
@@ -112,6 +116,8 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
         setLastBorrowedDetails(null);
         setReturnConfirmId(null);
         prevBookIdRef.current = book.id;
+        setSelectedMember(null);
+        setMemberSearch('');
       }
 
       // Initialize edit fields
@@ -171,14 +177,14 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
     setBorrowSuccess('');
     setBorrowError('');
 
-    if (!studentName || !admissionNumber || !borrowedDate || !dueDate || !copyNumber) {
-      setBorrowError('Please fill in all student details and dates.');
+    if ((!studentName && !selectedMember) || !borrowedDate || !dueDate || !copyNumber) {
+      setBorrowError('Please fill in all details.');
       return;
     }
 
     setIsSubmitting(true);
     try {
-      const borrowDetails = {
+      let borrowDetails = {
         studentName,
         studentForm,
         admissionNumber,
@@ -186,6 +192,14 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
         borrowedDate: new Date(borrowedDate).toISOString(),
         dueDate: new Date(dueDate).toISOString(),
       };
+
+      if (selectedMember) {
+        borrowDetails.memberId = selectedMember.id;
+        borrowDetails.studentName = selectedMember.name;
+        borrowDetails.admissionNumber = selectedMember.identifier;
+        borrowDetails.studentForm = selectedMember.additional_info || '';
+      }
+
       await onBorrow(book.id, borrowDetails);
       // If onBorrow doesn't throw, it was successful.
       setBorrowSuccess('Book borrowed successfully!');
@@ -194,6 +208,8 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
       setStudentName('');
       setAdmissionNumber('');
       setStudentForm('1');
+      setSelectedMember(null);
+      setMemberSearch('');
       setCopyNumber('');
     } catch (error) {
       console.error("Error processing borrow details:", error);
@@ -201,6 +217,14 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleMemberSearch = async (e) => {
+    const term = e.target.value;
+    setMemberSearch(term);
+    if (term.length < 2) { setMemberSearchResults([]); return; }
+    const res = await window.api.getMembers(term);
+    if (res.success) setMemberSearchResults(res.members);
   };
 
   return (
@@ -283,26 +307,47 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
             )}
             {borrowError && <p className="auth-error">{borrowError}</p>}
             <form onSubmit={handleBorrowSubmit} className="borrow-form">
-              <input
-                type="text"
-                value={studentName}
-                onChange={(e) => setStudentName(e.target.value)}
-                placeholder="Student Name"
-                required
-              />
-              <input
-                type="text"
-                value={admissionNumber}
-                onChange={(e) => setAdmissionNumber(e.target.value)}
-                placeholder="Admission Number"
-                required
-              />
-              <select value={studentForm} onChange={(e) => setStudentForm(e.target.value)}>
-                <option value="1">Form 1</option>
-                <option value="2">Form 2</option>
-                <option value="3">Form 3</option>
-                <option value="4">Form 4</option>
-              </select>
+              
+              {/* Member Search Section */}
+              <div className="form-group" style={{position: 'relative'}}>
+                <label>Search Member (Student/Teacher)</label>
+                <input 
+                  type="text" 
+                  placeholder="Search by Name, Admission No, or TSC No..." 
+                  value={memberSearch}
+                  onChange={handleMemberSearch}
+                  disabled={!!selectedMember}
+                />
+                {memberSearchResults.length > 0 && !selectedMember && (
+                  <ul className="search-results-dropdown">
+                    {memberSearchResults.map(m => (
+                      <li key={m.id} onClick={() => { setSelectedMember(m); setMemberSearch(`${m.name} (${m.identifier})`); setMemberSearchResults([]); }}>
+                        {m.name} - {m.type} ({m.identifier})
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {selectedMember && <button type="button" className="small-btn secondary" onClick={() => { setSelectedMember(null); setMemberSearch(''); }}>Clear Selection</button>}
+              </div>
+
+              {!selectedMember && (
+                <>
+                  <p style={{fontSize: '0.8rem', color: '#666', margin: '5px 0'}}>Or enter manually (Legacy):</p>
+                  <input
+                    type="text"
+                    value={studentName}
+                    onChange={(e) => setStudentName(e.target.value)}
+                    placeholder="Student Name"
+                  />
+                  <input
+                    type="text"
+                    value={admissionNumber}
+                    onChange={(e) => setAdmissionNumber(e.target.value)}
+                    placeholder="Admission Number"
+                  />
+                </>
+              )}
+
               <label>Copy Identifier (e.g., 1, 2, A, B)</label>
               <input
                 type="text"
@@ -340,7 +385,7 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
               {book.borrowed_records.map(record => (
                 <li key={record.id}>
                   <span>
-                    <strong>Copy #{record.copyNumber || '?'}</strong> - {record.studentName} (Adm: {record.admissionNumber})
+                    <strong>Copy #{record.copyNumber || '?'}</strong> - {record.studentName || record.member_name} (ID: {record.admissionNumber || record.member_identifier})
                     <br />
                     <small>Due: {new Date(record.dueDate).toLocaleString()}</small>
                   </span>
@@ -534,6 +579,165 @@ function AdminPanel() {
           <button type="submit">Add Librarian</button>
         </form>
       </div>
+    </div>
+  );
+}
+
+function MembersPanel() {
+  const [members, setMembers] = useState([]);
+  const [search, setSearch] = useState('');
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [selectedMember, setSelectedMember] = useState(null);
+  const { api } = window;
+
+  // Add Member State
+  const [newName, setNewName] = useState('');
+  const [newType, setNewType] = useState('Student');
+  const [newIdentifier, setNewIdentifier] = useState('');
+  const [newInfo, setNewInfo] = useState('');
+
+  useEffect(() => {
+    loadMembers();
+  }, [search]);
+
+  const loadMembers = async () => {
+    const res = await api.getMembers(search);
+    if (res.success) setMembers(res.members);
+  };
+
+  const handleAddMember = async (e) => {
+    e.preventDefault();
+    const res = await api.addMember({ name: newName, type: newType, identifier: newIdentifier, additional_info: newInfo });
+    if (res.success) {
+      setShowAddModal(false);
+      setNewName(''); setNewIdentifier(''); setNewInfo('');
+      loadMembers();
+    } else {
+      alert(res.message);
+    }
+  };
+
+  const openMemberDetails = async (id) => {
+    const res = await api.getMemberDetails(id);
+    if (res.success) {
+      setSelectedMember({ ...res.member, history: res.history });
+    }
+  };
+
+  return (
+    <div className="members-panel">
+      <div className="inventory-header">
+        <h2>Members (Students & Teachers)</h2>
+        <div style={{display: 'flex', gap: '10px'}}>
+          <input type="text" placeholder="Search by Name, Adm No, TSC..." value={search} onChange={e => setSearch(e.target.value)} className="search-bar" />
+          <button className="primary" onClick={() => setShowAddModal(true)}>Add Member</button>
+        </div>
+      </div>
+
+      <div className="table-container">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Type</th>
+              <th>Identifier (Adm/TSC)</th>
+              <th>Info</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {members.map(m => (
+              <tr key={m.id}>
+                <td>{m.name}</td>
+                <td><span className={`badge ${m.type.toLowerCase()}`}>{m.type}</span></td>
+                <td>{m.identifier}</td>
+                <td>{m.additional_info}</td>
+                <td><button className="small-btn secondary" onClick={() => openMemberDetails(m.id)}>View Details</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {showAddModal && (
+        <div className="modal-backdrop" onClick={() => setShowAddModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <h3>Add New Member</h3>
+            <form onSubmit={handleAddMember} className="book-form">
+              <input type="text" placeholder="Full Name" value={newName} onChange={e => setNewName(e.target.value)} required />
+              <select value={newType} onChange={e => setNewType(e.target.value)}>
+                <option value="Student">Student</option>
+                <option value="Teacher">Teacher</option>
+              </select>
+              <input type="text" placeholder={newType === 'Student' ? "Admission Number" : "TSC Number"} value={newIdentifier} onChange={e => setNewIdentifier(e.target.value)} required />
+              <input type="text" placeholder={newType === 'Student' ? "Form / Class" : "Department / Contact"} value={newInfo} onChange={e => setNewInfo(e.target.value)} />
+              <button type="submit">Save Member</button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {selectedMember && (
+        <div className="modal-backdrop" onClick={() => setSelectedMember(null)}>
+          <div className="modal-content wide-modal" onClick={e => e.stopPropagation()}>
+            <button className="modal-close-btn" onClick={() => setSelectedMember(null)}>&times;</button>
+            <h2>{selectedMember.name}</h2>
+            <p><strong>{selectedMember.type}</strong> | ID: {selectedMember.identifier}</p>
+            <hr/>
+            <h3>Borrowing History</h3>
+            <div className="history-list">
+              {selectedMember.history.length === 0 ? <p>No borrowing history.</p> : (
+                <table className="data-table">
+                  <thead><tr><th>Book</th><th>Borrowed</th><th>Due</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {selectedMember.history.map(h => (
+                      <tr key={h.recordId}>
+                        <td>{h.title}</td>
+                        <td>{new Date(h.borrowed_date).toLocaleDateString()}</td>
+                        <td>{new Date(h.due_date).toLocaleDateString()}</td>
+                        <td>
+                          {h.returned ? <span className="badge success">Returned</span> : 
+                           h.status === 'lost' ? <span className="badge danger">Lost</span> : 
+                           <span className="badge warning">Borrowed</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AllBorrowedView() {
+  const [records, setRecords] = useState([]);
+  useEffect(() => {
+    window.api.getAllBorrowedItems().then(res => { if(res.success) setRecords(res.records); });
+  }, []);
+
+  return (
+    <div className="all-borrowed-view">
+      <h2>All Currently Borrowed Books</h2>
+      <table className="data-table">
+        <thead><tr><th>Book</th><th>Borrower</th><th>ID</th><th>Due Date</th><th>Copy #</th></tr></thead>
+        <tbody>
+          {records.map(r => (
+            <tr key={r.id}>
+              <td>{r.title}</td>
+              <td>{r.member_name || r.student_name}</td>
+              <td>{r.member_identifier || r.admission_number}</td>
+              <td style={{color: new Date(r.due_date) < new Date() ? 'red' : 'inherit'}}>
+                {new Date(r.due_date).toLocaleDateString()}
+              </td>
+              <td>{r.copy_number}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -824,6 +1028,16 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
     }
   };
 
+  const handleMarkLost = async (bookId, recordId) => {
+    if (!window.confirm("Are you sure you want to mark this book as LOST?")) return;
+    const result = await api.markBookLost({ bookId, recordId });
+    if (result.success) {
+      const fetchedBooks = await api.getBooks();
+      setBooks(fetchedBooks);
+      setSelectedBook(null);
+    }
+  };
+
   const getFilteredBooks = () => {
     let filtered = books;
     if (availabilityFilter === 'available') {
@@ -913,6 +1127,8 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
       <div className="tabs">
         <button onClick={() => setActiveTab('dashboard')} className={activeTab === 'dashboard' ? 'active' : ''}>Dashboard</button>
         <button onClick={() => setActiveTab('inventory')} className={activeTab === 'inventory' ? 'active' : ''}>Inventory</button>
+        <button onClick={() => setActiveTab('members')} className={activeTab === 'members' ? 'active' : ''}>Members</button>
+        <button onClick={() => setActiveTab('all-borrowed')} className={activeTab === 'all-borrowed' ? 'active' : ''}>All Borrowed</button>
         <button onClick={() => setActiveTab('profile')} className={activeTab === 'profile' ? 'active' : ''}>Profile</button>
         {user.is_admin && (
           <button onClick={() => setActiveTab('admin')} className={activeTab === 'admin' ? 'active' : ''}>Admin Panel</button>
@@ -1111,6 +1327,8 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
         </div>
       )}
 
+      {activeTab === 'members' && <MembersPanel />}
+      {activeTab === 'all-borrowed' && <AllBorrowedView />}
       {activeTab === 'profile' && <ProfileSettings user={user} onUpdate={onUserUpdate} />}
 
       <BookDetailModal
@@ -1118,6 +1336,7 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
         onClose={() => setSelectedBook(null)}
         onBorrow={handleBorrow}
         onReturn={handleReturn}
+        onMarkLost={handleMarkLost} // You'll need to pass this prop down to BookDetailModal and add a button there if desired
         onUpdate={handleUpdateBook}
       />
 

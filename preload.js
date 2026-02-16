@@ -21,6 +21,12 @@ contextBridge.exposeInMainWorld('api', {
   adminRemoveLibrarian: (id) => ipcRenderer.invoke('admin-remove-librarian', id),
   borrowBook: (data) => ipcRenderer.invoke('borrow-book', data),
   returnBook: (data) => ipcRenderer.invoke('return-book', data),
+  markBookLost: (data) => ipcRenderer.invoke('mark-book-lost', data),
+  // Members
+  addMember: (member) => ipcRenderer.invoke('add-member', member),
+  getMembers: (search) => ipcRenderer.invoke('get-members', search),
+  getMemberDetails: (id) => ipcRenderer.invoke('get-member-details', id),
+  getAllBorrowedItems: () => ipcRenderer.invoke('get-all-borrowed-items'),
   getMostBorrowedBooks: () => ipcRenderer.invoke('get-most-borrowed-books'),
   getBorrowingTrends: () => ipcRenderer.invoke('get-borrowing-trends'),
   getOverdueBooks: () => ipcRenderer.invoke('get-overdue-books'),

@@ -119,6 +119,19 @@ async function setupDatabase() {
     ]);
   }
 
+  // Ensure members table exists (For Students and Teachers)
+  const membersTableExists = await knex.schema.hasTable('members');
+  if (!membersTableExists) {
+    console.log('Creating "members" table...');
+    await knex.schema.createTable('members', (table) => {
+      table.increments('id').primary();
+      table.string('name').notNullable();
+      table.string('type').notNullable(); // 'Student' or 'Teacher'
+      table.string('identifier').notNullable().unique(); // Admission Number or TSC Number
+      table.string('additional_info'); // JSON string or text for Form/Class/Contact
+    });
+  }
+
   // === Consolidated Schema Logic from main.js ===
 
   // Ensure borrowed_records table exists
@@ -141,6 +154,18 @@ async function setupDatabase() {
   const hasCopyNumber = await knex.schema.hasColumn('borrowed_records', 'copy_number');
   if (!hasCopyNumber) {
     await knex.schema.table('borrowed_records', (table) => table.string('copy_number'));
+  }
+
+  // Ensure borrowed_records has member_id and status
+  const hasMemberId = await knex.schema.hasColumn('borrowed_records', 'member_id');
+  if (!hasMemberId) {
+    await knex.schema.table('borrowed_records', (table) => {
+      table.integer('member_id').unsigned().references('id').inTable('members');
+      // Status: 'borrowed', 'returned', 'lost'
+      // We default to 'borrowed' for new records.
+      // Existing records with returned=true will need to be handled in application logic or migration
+      table.string('status').defaultTo('borrowed'); 
+    });
   }
 
   // Ensure password_resets table exists
