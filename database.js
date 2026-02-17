@@ -116,7 +116,19 @@ async function setupDatabase() {
     await knex('settings').insert([
       { key: 'school_name', value: 'My School Library' },
       { key: 'license_key', value: '' }, // Store the encrypted license string here
+      { key: 'fine_per_day', value: '0.50' },
+      { key: 'reservation_hold_days', value: '3' }, // Days to hold a notified reservation
     ]);
+  } else {
+    // Ensure fine_per_day setting exists for older setups
+    const fineSettingExists = await knex('settings').where({ key: 'fine_per_day' }).first();
+    if (!fineSettingExists) {
+      await knex('settings').insert({ key: 'fine_per_day', value: '0.50' });
+    }
+    const reservationSettingExists = await knex('settings').where({ key: 'reservation_hold_days' }).first();
+    if (!reservationSettingExists) {
+      await knex('settings').insert({ key: 'reservation_hold_days', value: '3' });
+    }
   }
 
   // Ensure members table exists (For Students and Teachers)
@@ -129,6 +141,36 @@ async function setupDatabase() {
       table.string('type').notNullable(); // 'Student' or 'Teacher'
       table.string('identifier').notNullable().unique(); // Admission Number or TSC Number
       table.string('additional_info'); // JSON string or text for Form/Class/Contact
+    });
+  }
+
+  // Fines Table
+  const finesTableExists = await knex.schema.hasTable('fines');
+  if (!finesTableExists) {
+    console.log('Creating "fines" table...');
+    await knex.schema.createTable('fines', (table) => {
+      table.increments('id').primary();
+      table.integer('member_id').unsigned().references('id').inTable('members').onDelete('CASCADE');
+      table.integer('borrow_record_id').unsigned().references('id').inTable('borrowed_records').onDelete('SET NULL');
+      table.decimal('amount').notNullable();
+      table.string('reason').notNullable(); // 'overdue' or 'lost'
+      table.string('status').notNullable().defaultTo('unpaid'); // 'unpaid', 'paid'
+      table.timestamp('date_issued').defaultTo(knex.fn.now());
+      table.timestamp('date_paid');
+    });
+  }
+
+  // Reservations Table
+  const reservationsTableExists = await knex.schema.hasTable('reservations');
+  if (!reservationsTableExists) {
+    console.log('Creating "reservations" table...');
+    await knex.schema.createTable('reservations', (table) => {
+      table.increments('id').primary();
+      table.integer('book_id').unsigned().references('id').inTable('books').onDelete('CASCADE');
+      table.integer('member_id').unsigned().references('id').inTable('members').onDelete('CASCADE');
+      table.timestamp('date_placed').defaultTo(knex.fn.now());
+      table.string('status').notNullable().defaultTo('active'); // 'active', 'notified', 'fulfilled', 'canceled'
+      table.timestamp('notified_at');
     });
   }
 
@@ -168,6 +210,18 @@ async function setupDatabase() {
     });
   }
 
+  // Ensure borrowed_records has status column (separate check for safety)
+  const hasStatus = await knex.schema.hasColumn('borrowed_records', 'status');
+  if (!hasStatus) {
+    await knex.schema.table('borrowed_records', (table) => table.string('status').defaultTo('borrowed'));
+  }
+
+  // Ensure borrowed_records has additional_members column for Group Borrowing
+  const hasAdditionalMembers = await knex.schema.hasColumn('borrowed_records', 'additional_members');
+  if (!hasAdditionalMembers) {
+    await knex.schema.table('borrowed_records', (table) => table.text('additional_members'));
+  }
+
   // Ensure password_resets table exists
   const passwordResetsTableExists = await knex.schema.hasTable('password_resets');
   if (!passwordResetsTableExists) {
@@ -199,6 +253,11 @@ async function setupDatabase() {
   const hasIsbn = await knex.schema.hasColumn('books', 'isbn');
   if (!hasIsbn) {
     await knex.schema.table('books', (table) => table.string('isbn'));
+  }
+
+  const hasReplacementCost = await knex.schema.hasColumn('books', 'replacement_cost');
+  if (!hasReplacementCost) {
+    await knex.schema.table('books', (table) => table.decimal('replacement_cost').defaultTo(0.0));
   }
 
   console.log('Database setup complete.');

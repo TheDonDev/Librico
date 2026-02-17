@@ -27,12 +27,21 @@ contextBridge.exposeInMainWorld('api', {
   getMembers: (search) => ipcRenderer.invoke('get-members', search),
   getMemberDetails: (id) => ipcRenderer.invoke('get-member-details', id),
   getAllBorrowedItems: () => ipcRenderer.invoke('get-all-borrowed-items'),
+  getBookReservations: (bookId) => ipcRenderer.invoke('get-book-reservations', bookId),
+  importMembersFromCsv: () => ipcRenderer.invoke('import-members-csv'),
   getMostBorrowedBooks: () => ipcRenderer.invoke('get-most-borrowed-books'),
   getBorrowingTrends: () => ipcRenderer.invoke('get-borrowing-trends'),
   getOverdueBooks: () => ipcRenderer.invoke('get-overdue-books'),
   // Settings & Licensing
   getSettings: () => ipcRenderer.invoke('get-settings'),
   updateSettings: (settings) => ipcRenderer.invoke('update-settings', settings),
+  // Fines
+  getAllFines: () => ipcRenderer.invoke('get-all-fines'),
+  payFine: (fineId) => ipcRenderer.invoke('pay-fine', fineId),
+  // Reservations
+  getAllReservations: () => ipcRenderer.invoke('get-all-reservations'),
+  createReservation: (data) => ipcRenderer.invoke('create-reservation', data),
+  cancelReservation: (id) => ipcRenderer.invoke('cancel-reservation', id),
   openExternalLink: (url) => ipcRenderer.send('open-external-link', url),
   // Dialogs
   showConfirmDialog: (options) => ipcRenderer.invoke('show-confirm-dialog', options),

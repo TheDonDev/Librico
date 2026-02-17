@@ -107,7 +107,8 @@ ipcMain.handle('get-books', async () => {
           admissionNumber: r.admission_number,
           borrowedDate: r.borrowed_date,
           dueDate: r.due_date,
-          copyNumber: r.copy_number
+          copyNumber: r.copy_number,
+          additionalMembers: r.additional_members ? JSON.parse(r.additional_members) : []
         }));
       return { ...book, borrowed_records: records };
     });
@@ -130,6 +131,7 @@ ipcMain.handle('add-book', async (event, book) => {
     edition: book.edition,
     publication_year: book.publicationYear,
     isbn: book.isbn,
+    replacement_cost: book.replacementCost,
   };
   // Handle SQLite insert return which is typically [id]
   const [result] = await db('books').insert(bookToInsert);
@@ -140,13 +142,13 @@ ipcMain.handle('add-book', async (event, book) => {
 // Update a book
 ipcMain.handle('update-book', async (event, book) => {
   try {
-    const { id, title, author, total_copies, cover_image, edition, publication_year, isbn } = book;
+    const { id, title, author, total_copies, cover_image, edition, publication_year, isbn, replacement_cost } = book;
     
     await db.transaction(async trx => {
       const currentBook = await trx('books').where({ id }).first();
       if (!currentBook) throw new Error('Book not found');
 
-      const updates = { title, author, cover_image, edition, publication_year, isbn };
+      const updates = { title, author, cover_image, edition, publication_year, isbn, replacement_cost };
       
       if (total_copies !== undefined && total_copies !== currentBook.total_copies) {
         const diff = total_copies - currentBook.total_copies;
@@ -193,6 +195,7 @@ ipcMain.handle('borrow-book', async (event, { bookId, borrowDetails }) => {
         due_date: borrowDetails.dueDate,
         copy_number: borrowDetails.copyNumber,
         member_id: borrowDetails.memberId || null, // Link to member if provided
+        additional_members: borrowDetails.additionalMembers ? JSON.stringify(borrowDetails.additionalMembers) : null,
         returned: false
       });
     });
@@ -206,9 +209,42 @@ ipcMain.handle('borrow-book', async (event, { bookId, borrowDetails }) => {
 // Return a book
 ipcMain.handle('return-book', async (event, { bookId, recordId }) => {
   try {
+    const record = await db('borrowed_records').where({ id: recordId }).first();
+    if (!record) throw new Error('Borrow record not found.');
+
     await db.transaction(async trx => {
+      // Check for overdue fine
+      const now = new Date();
+      const dueDate = new Date(record.due_date);
+      if (now > dueDate) {
+        const settings = await trx('settings').select('*');
+        const finePerDaySetting = settings.find(s => s.key === 'fine_per_day');
+        const finePerDay = parseFloat(finePerDaySetting?.value || 0);
+
+        if (finePerDay > 0) {
+          const daysOverdue = Math.ceil((now - dueDate) / (1000 * 60 * 60 * 24));
+          const fineAmount = daysOverdue * finePerDay;
+          
+          await trx('fines').insert({
+            member_id: record.member_id,
+            borrow_record_id: recordId,
+            amount: fineAmount,
+            reason: 'overdue',
+            status: 'unpaid',
+            date_issued: new Date().toISOString(),
+          });
+        }
+      }
+
       await trx('books').where('id', bookId).increment('copies_available', 1);
       await trx('borrowed_records').where('id', recordId).update({ returned: true, status: 'returned' });
+
+      // Check for reservations
+      const nextReservation = await trx('reservations').where({ book_id: bookId, status: 'active' }).orderBy('date_placed', 'asc').first();
+      if (nextReservation) {
+        await trx('books').where('id', bookId).decrement('copies_available', 1);
+        await trx('reservations').where('id', nextReservation.id).update({ status: 'notified', notified_at: new Date().toISOString() });
+      }
     });
     return { success: true };
   } catch (error) {
@@ -220,9 +256,25 @@ ipcMain.handle('return-book', async (event, { bookId, recordId }) => {
 // Mark a book as lost
 ipcMain.handle('mark-book-lost', async (event, { bookId, recordId }) => {
   try {
-    // When lost, we don't increment copies_available because the book is gone.
-    // We just update the status.
-    await db('borrowed_records').where('id', recordId).update({ status: 'lost', returned: false });
+    await db.transaction(async trx => {
+      const record = await trx('borrowed_records').where({ id: recordId }).first();
+      if (!record) throw new Error('Borrow record not found.');
+
+      // Update status
+      await trx('borrowed_records').where('id', recordId).update({ status: 'lost', returned: false });
+
+      // Add fine for replacement cost
+      const book = await trx('books').where({ id: bookId }).first();
+      const replacementCost = parseFloat(book?.replacement_cost || 0);
+      if (replacementCost > 0 && record.member_id) {
+        await trx('fines').insert({
+          member_id: record.member_id,
+          borrow_record_id: recordId,
+          amount: replacementCost,
+          reason: 'lost',
+        });
+      }
+    });
     return { success: true };
   } catch (error) {
     console.error('Mark lost book error:', error);
@@ -555,11 +607,21 @@ ipcMain.handle('get-member-details', async (event, memberId) => {
       )
       .orderBy('borrowed_records.borrowed_date', 'desc');
 
-    return { success: true, member, history };
+    const fines = await db('fines')
+      .where({ member_id: memberId })
+      .select('*')
+      .orderBy('date_issued', 'desc');
+
+    return { success: true, member, history, fines };
   } catch (error) {
     console.error('Get member details error:', error);
     return { success: false, message: 'Failed to fetch member details.' };
   }
+});
+
+ipcMain.handle('get-book-reservations', async (event, bookId) => {
+  const reservations = await db('reservations').where({ book_id: bookId }).join('members', 'reservations.member_id', 'members.id').select('reservations.*', 'members.name as member_name').orderBy('date_placed', 'asc');
+  return { success: true, reservations };
 });
 
 // Get ALL currently borrowed books with borrower info
@@ -577,10 +639,155 @@ ipcMain.handle('get-all-borrowed-items', async () => {
         'members.identifier as member_identifier',
         'members.type as member_type'
       );
-    return { success: true, records };
+
+    // Parse additional_members JSON string back to object
+    const parsedRecords = records.map(r => ({
+      ...r,
+      additional_members: r.additional_members ? JSON.parse(r.additional_members) : []
+    }));
+    return { success: true, records: parsedRecords };
   } catch (error) {
     console.error('Get all borrowed items error:', error);
     return { success: false, message: 'Failed to fetch borrowed items.' };
+  }
+});
+
+// Import members from CSV
+ipcMain.handle('import-members-csv', async () => {
+  try {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      title: 'Import Members from CSV',
+      filters: [{ name: 'CSV Files', extensions: ['csv'] }],
+      properties: ['openFile']
+    });
+
+    if (canceled || filePaths.length === 0) {
+      return { success: false, message: 'Import cancelled.' };
+    }
+
+    const fileContent = await fs.readFile(filePaths[0], 'utf-8');
+    const lines = fileContent.split(/\r?\n/).filter(line => line.trim() !== '');
+
+    if (lines.length < 2) return { success: false, message: 'CSV file is empty or missing headers.' };
+
+    const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
+    const membersToInsert = [];
+    let skippedCount = 0;
+
+    for (let i = 1; i < lines.length; i++) {
+      const values = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(val => val.trim().replace(/^"|"$/g, '').replace(/""/g, '"'));
+      const member = { type: 'Student' }; // Default
+
+      headers.forEach((header, index) => {
+        if (values[index] !== undefined) {
+          const val = values[index];
+          if (header.includes('name')) member.name = val;
+          else if (header.includes('type')) member.type = val;
+          else if (header.includes('identifier') || header.includes('adm') || header.includes('tsc') || header.includes('id')) member.identifier = val;
+          else if (header.includes('info') || header.includes('class') || header.includes('form')) member.additional_info = val;
+        }
+      });
+
+      if (member.name && member.identifier) membersToInsert.push(member);
+      else skippedCount++;
+    }
+
+    let insertedCount = 0;
+    await db.transaction(async trx => {
+      for (const m of membersToInsert) {
+        const exists = await trx('members').where('identifier', m.identifier).first();
+        if (!exists) { await trx('members').insert(m); insertedCount++; }
+      }
+    });
+
+    return { success: true, message: `Imported ${insertedCount} members. Skipped ${membersToInsert.length - insertedCount + skippedCount} duplicates/invalid.` };
+  } catch (error) {
+    console.error('Import members CSV error:', error);
+    return { success: false, message: 'Failed to import members.' };
+  }
+});
+
+// === Fines Management Handlers ===
+
+ipcMain.handle('get-all-fines', async () => {
+  try {
+    const fines = await db('fines')
+      .join('members', 'fines.member_id', 'members.id')
+      .leftJoin('borrowed_records', 'fines.borrow_record_id', 'borrowed_records.id')
+      .leftJoin('books', 'borrowed_records.book_id', 'books.id')
+      .select(
+        'fines.*',
+        'members.name as member_name',
+        'members.identifier as member_identifier',
+        'books.title as book_title'
+      )
+      .orderBy('fines.date_issued', 'desc');
+    return { success: true, fines };
+  } catch (error) {
+    console.error('Get all fines error:', error);
+    return { success: false, message: 'Failed to fetch fines.' };
+  }
+});
+
+ipcMain.handle('pay-fine', async (event, fineId) => {
+  try {
+    await db('fines').where({ id: fineId }).update({
+      status: 'paid',
+      date_paid: new Date().toISOString(),
+    });
+    return { success: true };
+  } catch (error) {
+    console.error('Pay fine error:', error);
+    return { success: false, message: 'Failed to process payment.' };
+  }
+});
+
+// === Reservation Management Handlers ===
+
+ipcMain.handle('get-all-reservations', async () => {
+  try {
+    const reservations = await db('reservations')
+      .join('books', 'reservations.book_id', 'books.id')
+      .join('members', 'reservations.member_id', 'members.id')
+      .select(
+        'reservations.*',
+        'books.title as book_title',
+        'members.name as member_name',
+        'members.identifier as member_identifier'
+      )
+      .orderBy('reservations.date_placed', 'asc');
+    return { success: true, reservations };
+  } catch (error) {
+    console.error('Get all reservations error:', error);
+    return { success: false, message: 'Failed to fetch reservations.' };
+  }
+});
+
+ipcMain.handle('create-reservation', async (event, { bookId, memberId }) => {
+  try {
+    const book = await db('books').where({ id: bookId }).first();
+    if (book.copies_available > 0) {
+      return { success: false, message: 'Cannot reserve a book that is in stock.' };
+    }
+    const existing = await db('reservations').where({ book_id: bookId, member_id: memberId, status: 'active' }).first();
+    if (existing) {
+      return { success: false, message: 'You already have an active reservation for this book.' };
+    }
+    await db('reservations').insert({ book_id: bookId, member_id: memberId });
+    return { success: true, message: 'Reservation placed successfully.' };
+  } catch (error) {
+    console.error('Create reservation error:', error);
+    return { success: false, message: 'Failed to place reservation.' };
+  }
+});
+
+ipcMain.handle('cancel-reservation', async (event, reservationId) => {
+  try {
+    await db('reservations').where({ id: reservationId }).update({ status: 'canceled' });
+    return { success: true };
+  } catch (error) {
+    console.error('Cancel reservation error:', error);
+    return { success: false, message: 'Failed to cancel reservation.' };
   }
 });
 
@@ -903,6 +1110,57 @@ ipcMain.handle('import-books-csv', async () => {
   }
 });
 
+async function cancelExpiredReservations() {
+  if (!db) return; // Database not ready
+  try {
+    const setting = await db('settings').where({ key: 'reservation_hold_days' }).first();
+    const holdDays = parseInt(setting?.value || '3', 10);
+
+    // If hold days is 0 or less, the feature is disabled.
+    if (holdDays <= 0) return;
+
+    const expiryDate = new Date();
+    expiryDate.setDate(expiryDate.getDate() - holdDays);
+
+    // Find reservations that were notified but not picked up within the hold period.
+    const expiredReservations = await db('reservations')
+      .where('status', 'notified')
+      .andWhere('notified_at', '<', expiryDate.toISOString());
+
+    if (expiredReservations.length === 0) return;
+
+    console.log(`[Scheduler] Found ${expiredReservations.length} expired reservations. Cancelling...`);
+
+    for (const reservation of expiredReservations) {
+      await db.transaction(async trx => {
+        // Mark the current reservation as canceled due to expiry.
+        await trx('reservations').where({ id: reservation.id }).update({ status: 'canceled' });
+
+        // Check if there's another person in the queue for the same book.
+        const nextInQueue = await trx('reservations')
+          .where({ book_id: reservation.book_id, status: 'active' })
+          .orderBy('date_placed', 'asc')
+          .first();
+
+        if (nextInQueue) {
+          // Notify the next person in the queue. The book copy remains held (not restocked).
+          await trx('reservations').where({ id: nextInQueue.id }).update({ 
+            status: 'notified', 
+            notified_at: new Date().toISOString() 
+          });
+          console.log(`[Scheduler] Notified next member (ID: ${nextInQueue.member_id}) in queue for book ID ${reservation.book_id}.`);
+        } else {
+          // No one else is waiting, so make the copy available again.
+          await trx('books').where({ id: reservation.book_id }).increment('copies_available', 1);
+          console.log(`[Scheduler] Restocked 1 copy of book ID ${reservation.book_id}.`);
+        }
+      });
+    }
+  } catch (error) {
+    console.error('[Scheduler] Error cancelling expired reservations:', error);
+  }
+}
+
 // This method will be called when Electron has finished initialization
 app.whenReady().then(async () => {
   // Initialize the database connection now that the app is ready
@@ -912,6 +1170,12 @@ app.whenReady().then(async () => {
   await database.setupDatabase();
   // Get the now-initialized instance for all IPC handlers to use.
   db = database.getKnex();
+
+  // --- Automated Tasks ---
+  // Run the reservation check on startup
+  cancelExpiredReservations();
+  // And then run it periodically, e.g., every hour
+  setInterval(cancelExpiredReservations, 3600 * 1000);
 
   createWindow();
 

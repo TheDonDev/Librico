@@ -67,7 +67,75 @@ const printReceipt = (details) => {
     }, 1000);
 };
 
-function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
+const printOverdueReport = (overdueBooks) => {
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    document.body.appendChild(iframe);
+    
+    const doc = iframe.contentWindow.document;
+    doc.open();
+    doc.write(`
+        <html>
+          <head>
+            <title>Overdue Books Report</title>
+            <style>
+              body { font-family: sans-serif; padding: 20px; }
+              h2 { text-align: center; margin-bottom: 20px; border-bottom: 2px solid #333; padding-bottom: 10px; }
+              .meta { margin-bottom: 20px; font-size: 0.9rem; color: #555; }
+              table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9rem; }
+              th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+              th { background-color: #f4f4f4; font-weight: bold; }
+              tr:nth-child(even) { background-color: #f9f9f9; }
+              .footer { margin-top: 30px; text-align: center; font-size: 12px; color: #777; border-top: 1px solid #eee; padding-top: 10px; }
+              @media print { body { margin: 0; } }
+            </style>
+          </head>
+          <body>
+            <h2>Overdue Books Report</h2>
+            <div class="meta">
+              <strong>Generated:</strong> ${new Date().toLocaleString()}<br/>
+              <strong>Total Overdue:</strong> ${overdueBooks.length}
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Book Title</th>
+                  <th>Borrower</th>
+                  <th>ID / Adm No</th>
+                  <th>Due Date</th>
+                  <th>Copy #</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${overdueBooks.map(book => `
+                  <tr>
+                    <td>${book.title}</td>
+                    <td>${book.member_name || book.student_name}</td>
+                    <td>${book.member_identifier || book.admission_number}</td>
+                    <td style="color: #d32f2f;">${new Date(book.due_date).toLocaleDateString()}</td>
+                    <td>${book.copy_number || '-'}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+            <div class="footer">
+              Librico Library Management System
+            </div>
+          </body>
+        </html>
+    `);
+    doc.close();
+
+    iframe.contentWindow.focus();
+    iframe.contentWindow.print();
+    
+    // Clean up the iframe after printing
+    setTimeout(() => {
+      document.body.removeChild(iframe);
+    }, 1000);
+};
+
+function BookDetailModal({ book, onClose, onBorrow, onReturn, onMarkLost, onUpdate }) {
   const [studentName, setStudentName] = useState('');
   const [studentForm, setStudentForm] = useState('1');
   const [admissionNumber, setAdmissionNumber] = useState('');
@@ -84,6 +152,7 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
   const [editEdition, setEditEdition] = useState('');
   const [editPublicationYear, setEditPublicationYear] = useState('');
   const [editIsbn, setEditIsbn] = useState('');
+  const [editReplacementCost, setEditReplacementCost] = useState(0);
   const [borrowSuccess, setBorrowSuccess] = useState('');
   const [borrowError, setBorrowError] = useState('');
   const [lastBorrowedDetails, setLastBorrowedDetails] = useState(null);
@@ -91,7 +160,15 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
   const prevBookIdRef = useRef(null);
   
   const [memberSearch, setMemberSearch] = useState('');
+  const [reservations, setReservations] = useState([]);
+  const [reservationMessage, setReservationMessage] = useState('');
   const [memberSearchResults, setMemberSearchResults] = useState([]);
+  
+  // Group Borrow State
+  const [isGroupBorrow, setIsGroupBorrow] = useState(false);
+  const [groupMembers, setGroupMembers] = useState([]);
+  const [groupMemberSearch, setGroupMemberSearch] = useState('');
+  const [groupMemberSearchResults, setGroupMemberSearchResults] = useState([]);
 
   // Helper to format a Date object into a string suitable for datetime-local input
   const toDateTimeLocal = (date) => {
@@ -115,9 +192,14 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
         setBorrowError('');
         setLastBorrowedDetails(null);
         setReturnConfirmId(null);
+        setReservationMessage('');
         prevBookIdRef.current = book.id;
         setSelectedMember(null);
         setMemberSearch('');
+        setIsGroupBorrow(false);
+        setGroupMembers([]);
+        setGroupMemberSearch('');
+        setGroupMemberSearchResults([]);
       }
 
       // Initialize edit fields
@@ -128,10 +210,16 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
       setEditEdition(book.edition || '');
       setEditPublicationYear(book.publication_year || '');
       setEditIsbn(book.isbn || '');
+      setEditReplacementCost(book.replacement_cost || 0);
+
+      // Fetch reservations for this book
+      window.api.getBookReservations(book.id).then(res => {
+        if (res.success) setReservations(res.reservations);
+      });
     } else {
       prevBookIdRef.current = null;
     }
-  }, [book]);
+  }, [book, onBorrow]);
 
   if (!book) return null;
 
@@ -160,7 +248,8 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
         cover_image: editCoverImage,
         edition: editEdition,
         publication_year: editPublicationYear,
-        isbn: editIsbn
+        isbn: editIsbn,
+        replacement_cost: parseFloat(editReplacementCost) || 0,
       });
       setIsEditing(false);
     } catch (error) {
@@ -200,6 +289,10 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
         borrowDetails.studentForm = selectedMember.additional_info || '';
       }
 
+      if (isGroupBorrow && groupMembers.length > 0) {
+        borrowDetails.additionalMembers = groupMembers;
+      }
+
       await onBorrow(book.id, borrowDetails);
       // If onBorrow doesn't throw, it was successful.
       setBorrowSuccess('Book borrowed successfully!');
@@ -211,6 +304,10 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
       setSelectedMember(null);
       setMemberSearch('');
       setCopyNumber('');
+      setIsGroupBorrow(false);
+      setGroupMembers([]);
+      setGroupMemberSearch('');
+      setGroupMemberSearchResults([]);
     } catch (error) {
       console.error("Error processing borrow details:", error);
       setBorrowError(`An error occurred while borrowing the book: ${error.message}`);
@@ -225,6 +322,35 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
     if (term.length < 2) { setMemberSearchResults([]); return; }
     const res = await window.api.getMembers(term);
     if (res.success) setMemberSearchResults(res.members);
+  };
+
+  const handleGroupMemberSearch = async (e) => {
+    const term = e.target.value;
+    setGroupMemberSearch(term);
+    if (term.length < 2) { setGroupMemberSearchResults([]); return; }
+    const res = await window.api.getMembers(term);
+    if (res.success) setGroupMemberSearchResults(res.members);
+  };
+
+  const addGroupMember = (member) => {
+    if (!groupMembers.find(m => m.id === member.id)) {
+      setGroupMembers([...groupMembers, { id: member.id, name: member.name, identifier: member.identifier }]);
+    }
+    setGroupMemberSearch('');
+    setGroupMemberSearchResults([]);
+  };
+
+  const handleReserveBook = async () => {
+    if (!selectedMember) {
+      setReservationMessage('Please select a member to place a reservation.');
+      return;
+    }
+    setReservationMessage('');
+    const res = await window.api.createReservation({ bookId: book.id, memberId: selectedMember.id });
+    setReservationMessage(res.message);
+    if (res.success) {
+      window.api.getBookReservations(book.id).then(res => { if (res.success) setReservations(res.reservations); });
+    }
   };
 
   return (
@@ -265,6 +391,9 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
 
               <label>ISBN (Optional)</label>
               <input type="text" value={editIsbn} onChange={(e) => setEditIsbn(e.target.value)} />
+
+              <label>Replacement Cost ($)</label>
+              <input type="number" step="0.01" value={editReplacementCost} onChange={(e) => setEditReplacementCost(e.target.value)} />
 
               <label>Total Copies</label>
               <input type="number" value={editCopies} onChange={(e) => setEditCopies(e.target.value)} min="1" required />
@@ -310,7 +439,7 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
               
               {/* Member Search Section */}
               <div className="form-group" style={{position: 'relative'}}>
-                <label>Search Member (Student/Teacher)</label>
+                <label>Search Primary Borrower (Group Leader)</label>
                 <input 
                   type="text" 
                   placeholder="Search by Name, Admission No, or TSC No..." 
@@ -348,6 +477,50 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
                 </>
               )}
 
+              {/* Group Borrow Section */}
+              <div className="form-group" style={{marginTop: '10px', borderTop: '1px dashed #ccc', paddingTop: '10px'}}>
+                <div className="checkbox-group">
+                  <input 
+                    type="checkbox" 
+                    id="groupBorrow" 
+                    checked={isGroupBorrow} 
+                    onChange={(e) => setIsGroupBorrow(e.target.checked)} 
+                  />
+                  <label htmlFor="groupBorrow" style={{fontWeight: 'bold'}}>Borrow as a Group</label>
+                </div>
+                
+                {isGroupBorrow && (
+                  <div style={{marginLeft: '20px', marginTop: '5px'}}>
+                    <label style={{fontSize: '0.9rem'}}>Add Group Members:</label>
+                    <div style={{position: 'relative'}}>
+                      <input 
+                        type="text" 
+                        placeholder="Search member to add..." 
+                        value={groupMemberSearch}
+                        onChange={handleGroupMemberSearch}
+                      />
+                      {groupMemberSearchResults.length > 0 && (
+                        <ul className="search-results-dropdown">
+                          {groupMemberSearchResults.map(m => (
+                            <li key={m.id} onClick={() => addGroupMember(m)}>{m.name} ({m.identifier})</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                    {groupMembers.length > 0 && (
+                      <ul style={{listStyle: 'none', padding: 0, marginTop: '5px'}}>
+                        {groupMembers.map(m => (
+                          <li key={m.id} style={{display: 'flex', justifyContent: 'space-between', background: '#f5f5f5', padding: '5px', marginBottom: '2px', borderRadius: '4px', fontSize: '0.9rem'}}>
+                            <span>{m.name}</span>
+                            <button type="button" className="small-btn danger" onClick={() => setGroupMembers(groupMembers.filter(x => x.id !== m.id))}>&times;</button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <label>Copy Identifier (e.g., 1, 2, A, B)</label>
               <input
                 type="text"
@@ -376,6 +549,53 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
           </div>
         )}
 
+        {/* Reservation Section */}
+        {!isEditing && book.copies_available <= 0 && (
+          <div className="borrow-section">
+            <h3>Reserve This Book</h3>
+            <p>This book is currently out of stock. You can reserve a copy for a member.</p>
+            
+            {/* Member Search Section */}
+            <div className="form-group" style={{position: 'relative'}}>
+              <label>Search Member to place reservation for:</label>
+              <input 
+                type="text" 
+                placeholder="Search by Name, Admission No, or TSC No..." 
+                value={memberSearch}
+                onChange={handleMemberSearch}
+                disabled={!!selectedMember}
+              />
+              {memberSearchResults.length > 0 && !selectedMember && (
+                <ul className="search-results-dropdown">
+                  {memberSearchResults.map(m => (
+                    <li key={m.id} onClick={() => { setSelectedMember(m); setMemberSearch(`${m.name} (${m.identifier})`); setMemberSearchResults([]); }}>
+                      {m.name} - {m.type} ({m.identifier})
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {selectedMember && <button type="button" className="small-btn secondary" onClick={() => { setSelectedMember(null); setMemberSearch(''); }}>Clear Selection</button>}
+            </div>
+            {reservationMessage && <p className={reservationMessage.includes('success') ? 'auth-success' : 'auth-error'}>{reservationMessage}</p>}
+            <button onClick={handleReserveBook} disabled={!selectedMember}>Place Reservation</button>
+            
+            <div className="borrowed-list-section" style={{marginTop: '20px'}}>
+              <h4>Reservation Queue</h4>
+              {reservations.length > 0 ? (
+                <ul>
+                  {reservations.filter(r => r.status === 'active').map((res, index) => (
+                    <li key={res.id}>
+                      <span><strong>#{index + 1}</strong> - {res.member_name}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p>No active reservations.</p>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Borrowed List */}
         {!isEditing && (
         <div className="borrowed-list-section">
@@ -387,11 +607,17 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onUpdate }) {
                   <span>
                     <strong>Copy #{record.copyNumber || '?'}</strong> - {record.studentName || record.member_name} (ID: {record.admissionNumber || record.member_identifier})
                     <br />
+                    {record.additionalMembers && record.additionalMembers.length > 0 && (
+                      <div style={{fontSize: '0.85em', color: '#555', marginBottom: '4px'}}>
+                        <strong>Group:</strong> {record.additionalMembers.map(m => m.name).join(', ')}
+                      </div>
+                    )}
                     <small>Due: {new Date(record.dueDate).toLocaleString()}</small>
                   </span>
                   {returnConfirmId === record.id ? (
-                    <div style={{display: 'flex', gap: '5px'}}>
-                      <button className="danger small-btn" onClick={() => onReturn(book.id, record.id)}>Confirm</button>
+                    <div style={{display: 'flex', gap: '5px', flexWrap: 'wrap'}}>
+                      <button className="primary small-btn" onClick={() => onReturn(book.id, record.id)}>Confirm Return</button>
+                      <button className="small-btn" style={{ backgroundColor: '#ff9800', color: 'white', border: '1px solid #e65100' }} onClick={() => onMarkLost(book.id, record.id)}>Mark Lost</button>
                       <button className="secondary small-btn" onClick={() => setReturnConfirmId(null)}>Cancel</button>
                     </div>
                   ) : (
@@ -420,6 +646,8 @@ function AdminPanel() {
   const [success, setSuccess] = useState('');
   const [exportMessage, setExportMessage] = useState('');
 
+  const [settings, setSettings] = useState({});
+
   const { api } = window;
 
   const fetchLibrarians = async () => {
@@ -431,8 +659,29 @@ function AdminPanel() {
     }
   };
 
+  const fetchSettings = async () => {
+    const result = await api.getSettings();
+    if (result.success) {
+      setSettings(result.settings);
+    } else {
+      setError(result.message || 'Failed to fetch settings.');
+    }
+  };
+
+  const handleSettingsUpdate = async (e) => {
+    e.preventDefault();
+    clearMessages();
+    const result = await api.updateSettings(settings);
+    if (result.success) {
+      setSuccess('Settings updated successfully!');
+    } else {
+      setError(result.message || 'Failed to update settings.');
+    }
+  };
+
   useEffect(() => {
     fetchLibrarians();
+    fetchSettings();
   }, []);
 
   const clearMessages = () => {
@@ -566,6 +815,36 @@ function AdminPanel() {
 
       <hr />
 
+      <div className="library-settings-section">
+        <h3>Library Policies</h3>
+        <p>Configure fines and reservation rules for the library.</p>
+        <form onSubmit={handleSettingsUpdate} className="book-form">
+          <div className="form-group">
+            <label htmlFor="fine_per_day">Fine per Day for Overdue Books ($)</label>
+            <input
+              id="fine_per_day"
+              type="number"
+              step="0.01"
+              value={settings.fine_per_day || ''}
+              onChange={(e) => setSettings(prev => ({...prev, fine_per_day: e.target.value}))}
+            />
+          </div>
+          <div className="form-group">
+            <label htmlFor="reservation_hold_days">Days to Hold a Reservation (0 to disable)</label>
+            <input
+              id="reservation_hold_days"
+              type="number"
+              step="1"
+              value={settings.reservation_hold_days || ''}
+              onChange={(e) => setSettings(prev => ({...prev, reservation_hold_days: e.target.value}))}
+            />
+          </div>
+          <button type="submit">Save Policies</button>
+        </form>
+      </div>
+
+      <hr />
+
       <div className="add-librarian-form">
         <h3>Add New Librarian</h3>
         <form onSubmit={handleAddLibrarian} className="book-form">
@@ -617,10 +896,20 @@ function MembersPanel() {
     }
   };
 
+  const handleImportMembers = async () => {
+    const res = await api.importMembersFromCsv();
+    if (res.success) {
+      alert(res.message);
+      loadMembers();
+    } else {
+      alert(res.message);
+    }
+  };
+
   const openMemberDetails = async (id) => {
     const res = await api.getMemberDetails(id);
     if (res.success) {
-      setSelectedMember({ ...res.member, history: res.history });
+      setSelectedMember({ ...res.member, history: res.history, fines: res.fines });
     }
   };
 
@@ -629,6 +918,7 @@ function MembersPanel() {
       <div className="inventory-header">
         <h2>Members (Students & Teachers)</h2>
         <div style={{display: 'flex', gap: '10px'}}>
+          <button className="secondary" onClick={handleImportMembers}>Import CSV</button>
           <input type="text" placeholder="Search by Name, Adm No, TSC..." value={search} onChange={e => setSearch(e.target.value)} className="search-bar" />
           <button className="primary" onClick={() => setShowAddModal(true)}>Add Member</button>
         </div>
@@ -684,6 +974,28 @@ function MembersPanel() {
             <h2>{selectedMember.name}</h2>
             <p><strong>{selectedMember.type}</strong> | ID: {selectedMember.identifier}</p>
             <hr/>
+            <h3>Fines</h3>
+            <div className="history-list">
+              {selectedMember.fines && selectedMember.fines.length > 0 ? (
+                <table className="data-table">
+                  <thead><tr><th>Date</th><th>Reason</th><th>Amount</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {selectedMember.fines.map(f => (
+                      <tr key={f.id}>
+                        <td>{new Date(f.date_issued).toLocaleDateString()}</td>
+                        <td style={{textTransform: 'capitalize'}}>{f.reason}</td>
+                        <td>${parseFloat(f.amount).toFixed(2)}</td>
+                        <td>
+                          {f.status === 'paid' ? <span className="badge success">Paid</span> : <span className="badge danger">Unpaid</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <p>No fines on record.</p>
+              )}
+            </div>
             <h3>Borrowing History</h3>
             <div className="history-list">
               {selectedMember.history.length === 0 ? <p>No borrowing history.</p> : (
@@ -713,27 +1025,185 @@ function MembersPanel() {
   );
 }
 
+function FinesPanel() {
+  const [fines, setFines] = useState([]);
+  const [filter, setFilter] = useState('unpaid');
+  const { api } = window;
+
+  const loadFines = async () => {
+    const res = await api.getAllFines();
+    if (res.success) setFines(res.fines);
+  };
+
+  useEffect(() => {
+    loadFines();
+  }, []);
+
+  const handlePayFine = async (fineId) => {
+    if (window.confirm('Mark this fine as paid?')) {
+      const res = await api.payFine(fineId);
+      if (res.success) {
+        loadFines();
+      } else {
+        alert('Failed to process payment.');
+      }
+    }
+  };
+
+  const filteredFines = fines.filter(f => filter === 'all' || f.status === filter);
+
+  return (
+    <div className="section-card">
+      <div className="inventory-header">
+        <h2>Fines Management</h2>
+        <select value={filter} onChange={e => setFilter(e.target.value)} className="availability-filter">
+          <option value="unpaid">Unpaid</option>
+          <option value="paid">Paid</option>
+          <option value="all">All Fines</option>
+        </select>
+      </div>
+      <table className="data-table">
+        <thead><tr><th>Member</th><th>Reason</th><th>Book</th><th>Amount</th><th>Date Issued</th><th>Action</th></tr></thead>
+        <tbody>
+          {filteredFines.map(f => (
+            <tr key={f.id}>
+              <td>{f.member_name} ({f.member_identifier})</td>
+              <td style={{textTransform: 'capitalize'}}>{f.reason}</td>
+              <td>{f.book_title || 'N/A'}</td>
+              <td>${parseFloat(f.amount).toFixed(2)}</td>
+              <td>{new Date(f.date_issued).toLocaleString()}</td>
+              <td>
+                {f.status === 'unpaid' && (
+                  <button className="small-btn primary" onClick={() => handlePayFine(f.id)}>Mark Paid</button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ReservationsPanel() {
+  const [reservations, setReservations] = useState([]);
+  const { api } = window;
+
+  const loadReservations = async () => {
+    const res = await api.getAllReservations();
+    if (res.success) setReservations(res.reservations);
+  };
+
+  useEffect(() => {
+    loadReservations();
+  }, []);
+
+  const handleCancel = async (id) => {
+    if (window.confirm('Are you sure you want to cancel this reservation?')) {
+      await api.cancelReservation(id);
+      loadReservations();
+    }
+  };
+
+  return (
+    <div className="section-card">
+      <h2>Book Reservations</h2>
+      <p>Members can reserve books that are out of stock. When a copy is returned, the first person in the queue is notified.</p>
+      <table className="data-table">
+        <thead><tr><th>Book</th><th>Member</th><th>Date Placed</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody>
+          {reservations.map(r => (
+            <tr key={r.id}>
+              <td>{r.book_title}</td>
+              <td>{r.member_name}</td>
+              <td>{new Date(r.date_placed).toLocaleString()}</td>
+              <td><span className={`badge ${r.status}`}>{r.status}</span></td>
+              <td>
+                {(r.status === 'active' || r.status === 'notified') && (
+                  <button className="small-btn danger" onClick={() => handleCancel(r.id)}>Cancel</button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function AllBorrowedView() {
   const [records, setRecords] = useState([]);
+  const [filter, setFilter] = useState('all');
+  const [search, setSearch] = useState('');
+
   useEffect(() => {
     window.api.getAllBorrowedItems().then(res => { if(res.success) setRecords(res.records); });
   }, []);
 
+  const handlePrintOverdue = () => {
+    const overdueItems = records.filter(r => new Date(r.due_date) < new Date() && r.status !== 'lost');
+    if (overdueItems.length === 0) {
+      alert("No overdue books found to print.");
+      return;
+    }
+    printOverdueReport(overdueItems);
+  };
+
+  const filteredRecords = records.filter(r => {
+    let matchesFilter = false;
+    if (filter === 'all') {
+      matchesFilter = true;
+    } else if (filter === 'overdue') {
+      matchesFilter = new Date(r.due_date) < new Date() && r.status !== 'lost';
+    } else {
+      matchesFilter = (r.status || 'borrowed') === filter;
+    }
+
+    const s = search.toLowerCase();
+    const matchesSearch = !search || 
+      (r.title && r.title.toLowerCase().includes(s)) ||
+      (r.member_name && r.member_name.toLowerCase().includes(s)) ||
+      (r.student_name && r.student_name.toLowerCase().includes(s)) ||
+      (r.member_identifier && r.member_identifier.toLowerCase().includes(s)) ||
+      (r.admission_number && r.admission_number.toLowerCase().includes(s));
+    return matchesFilter && matchesSearch;
+  });
+
   return (
     <div className="all-borrowed-view">
-      <h2>All Currently Borrowed Books</h2>
+      <div className="inventory-header">
+        <h2>All Currently Borrowed Books</h2>
+        <div style={{display: 'flex', gap: '10px', alignItems: 'center'}}>
+          <input type="text" placeholder="Search book, student, or ID..." value={search} onChange={e => setSearch(e.target.value)} className="search-bar" />
+          <select value={filter} onChange={(e) => setFilter(e.target.value)} className="availability-filter" style={{width: '180px'}}>
+            <option value="all">Show All</option>
+            <option value="borrowed">Active Loans</option>
+            <option value="overdue">Overdue Books</option>
+            <option value="lost">Lost Books</option>
+          </select>
+          <button onClick={handlePrintOverdue} className="secondary">Print Overdue List</button>
+        </div>
+      </div>
       <table className="data-table">
-        <thead><tr><th>Book</th><th>Borrower</th><th>ID</th><th>Due Date</th><th>Copy #</th></tr></thead>
+        <thead><tr><th>Book</th><th>Borrower</th><th>ID</th><th>Due Date</th><th>Copy #</th><th>Status</th></tr></thead>
         <tbody>
-          {records.map(r => (
+          {filteredRecords.map(r => (
             <tr key={r.id}>
               <td>{r.title}</td>
               <td>{r.member_name || r.student_name}</td>
               <td>{r.member_identifier || r.admission_number}</td>
+              <td>
+                {r.additional_members && r.additional_members.length > 0 && (
+                  <span className="badge" style={{backgroundColor: '#6c757d', color: 'white', fontSize: '0.75rem'}}>+ {r.additional_members.length} Group</span>
+                )}
+              </td>
               <td style={{color: new Date(r.due_date) < new Date() ? 'red' : 'inherit'}}>
                 {new Date(r.due_date).toLocaleDateString()}
               </td>
               <td>{r.copy_number}</td>
+              <td>
+                {r.status === 'lost' ? <span className="badge danger">Lost</span> : <span className="badge warning">Borrowed</span>}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -865,6 +1335,7 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
   const [author, setAuthor] = useState('');
   const [copies, setCopies] = useState(1);
   const [coverImage, setCoverImage] = useState('');
+  const [replacementCost, setReplacementCost] = useState('');
   const [edition, setEdition] = useState('');
   const [publicationYear, setPublicationYear] = useState('');
   const [isbn, setIsbn] = useState('');
@@ -925,7 +1396,7 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
     e.preventDefault();
     if (!title || !author || copies < 1) return;
 
-    const newBook = { title, author, copies: parseInt(copies, 10), coverImage, edition, publicationYear, isbn };
+    const newBook = { title, author, copies: parseInt(copies, 10), coverImage, edition, publicationYear, isbn, replacementCost: parseFloat(replacementCost) || 0 };
     const addedBook = await api.addBook(newBook);
 
     setBooks([...books, addedBook]);
@@ -935,6 +1406,7 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
     setEdition('');
     setPublicationYear('');
     setIsbn('');
+    setReplacementCost('');
     setQrInput('');
     api.getBooks().then((fetchedBooks) => {
       setBooks(fetchedBooks);
@@ -1129,6 +1601,8 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
         <button onClick={() => setActiveTab('inventory')} className={activeTab === 'inventory' ? 'active' : ''}>Inventory</button>
         <button onClick={() => setActiveTab('members')} className={activeTab === 'members' ? 'active' : ''}>Members</button>
         <button onClick={() => setActiveTab('all-borrowed')} className={activeTab === 'all-borrowed' ? 'active' : ''}>All Borrowed</button>
+        <button onClick={() => setActiveTab('reservations')} className={activeTab === 'reservations' ? 'active' : ''}>Reservations</button>
+        <button onClick={() => setActiveTab('fines')} className={activeTab === 'fines' ? 'active' : ''}>Fines</button>
         <button onClick={() => setActiveTab('profile')} className={activeTab === 'profile' ? 'active' : ''}>Profile</button>
         {user.is_admin && (
           <button onClick={() => setActiveTab('admin')} className={activeTab === 'admin' ? 'active' : ''}>Admin Panel</button>
@@ -1242,6 +1716,12 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
             />
             <input
               type="number"
+              value={replacementCost}
+              onChange={(e) => setReplacementCost(e.target.value)}
+              placeholder="Replacement Cost (Optional)"
+            />
+            <input
+              type="number"
               value={copies}
               onChange={(e) => setCopies(e.target.value)}
               placeholder="Copies"
@@ -1329,6 +1809,8 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
 
       {activeTab === 'members' && <MembersPanel />}
       {activeTab === 'all-borrowed' && <AllBorrowedView />}
+      {activeTab === 'reservations' && <ReservationsPanel />}
+      {activeTab === 'fines' && <FinesPanel />}
       {activeTab === 'profile' && <ProfileSettings user={user} onUpdate={onUserUpdate} />}
 
       <BookDetailModal
