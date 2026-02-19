@@ -392,7 +392,7 @@ function BookDetailModal({ book, onClose, onBorrow, onReturn, onMarkLost, onUpda
               <label>ISBN (Optional)</label>
               <input type="text" value={editIsbn} onChange={(e) => setEditIsbn(e.target.value)} />
 
-              <label>Replacement Cost ($)</label>
+              <label>Replacement Cost (KES)</label>
               <input type="number" step="0.01" value={editReplacementCost} onChange={(e) => setEditReplacementCost(e.target.value)} />
 
               <label>Total Copies</label>
@@ -718,11 +718,13 @@ function AdminPanel() {
 
   const handleRemoveLibrarian = async (librarianId) => {
     clearMessages();
-    if (!window.confirm('Are you sure you want to remove this librarian? This action cannot be undone.')) {
-      return;
-    }
-    // Fix for focus issue after window.confirm in Electron
-    window.focus();
+    const confirmed = await api.showConfirmDialog({
+      title: 'Remove Librarian',
+      message: 'Are you sure you want to remove this librarian?',
+      detail: 'This action cannot be undone.'
+    });
+    if (!confirmed) return;
+
     const result = await api.adminRemoveLibrarian({ id: librarianId });
     if (result.success) {
       setSuccess('Librarian removed successfully!');
@@ -767,9 +769,12 @@ function AdminPanel() {
 
   const handleRestoreDatabase = async () => {
     clearMessages();
-    if (!window.confirm('WARNING: Restoring a database will overwrite all current data. This action cannot be undone. The application will restart automatically. Continue?')) {
-      return;
-    }
+    const confirmed = await api.showConfirmDialog({
+      title: 'Confirm Database Restore',
+      message: 'WARNING: This will overwrite all current data with the backup file.',
+      detail: 'This action cannot be undone. The application will restart automatically. Continue?'
+    });
+    if (!confirmed) return;
     setExportMessage('Restoring database...');
     const result = await api.restoreDatabase();
     // If successful, app restarts, so we might not see this message.
@@ -820,7 +825,7 @@ function AdminPanel() {
         <p>Configure fines and reservation rules for the library.</p>
         <form onSubmit={handleSettingsUpdate} className="book-form">
           <div className="form-group">
-            <label htmlFor="fine_per_day">Fine per Day for Overdue Books ($)</label>
+            <label htmlFor="fine_per_day">Fine per Day for Overdue Books (KES)</label>
             <input
               id="fine_per_day"
               type="number"
@@ -984,7 +989,7 @@ function MembersPanel() {
                       <tr key={f.id}>
                         <td>{new Date(f.date_issued).toLocaleDateString()}</td>
                         <td style={{textTransform: 'capitalize'}}>{f.reason}</td>
-                        <td>${parseFloat(f.amount).toFixed(2)}</td>
+                        <td>KES {parseFloat(f.amount).toFixed(2)}</td>
                         <td>
                           {f.status === 'paid' ? <span className="badge success">Paid</span> : <span className="badge danger">Unpaid</span>}
                         </td>
@@ -1010,6 +1015,7 @@ function MembersPanel() {
                         <td>
                           {h.returned ? <span className="badge success">Returned</span> : 
                            h.status === 'lost' ? <span className="badge danger">Lost</span> : 
+                           h.status === 'found' ? <span className="badge info">Found</span> : 
                            <span className="badge warning">Borrowed</span>}
                         </td>
                       </tr>
@@ -1040,12 +1046,32 @@ function FinesPanel() {
   }, []);
 
   const handlePayFine = async (fineId) => {
-    if (window.confirm('Mark this fine as paid?')) {
+    const confirmed = await api.showConfirmDialog({
+      title: 'Confirm Payment',
+      message: 'Mark this fine as paid?',
+    });
+    if (confirmed) {
       const res = await api.payFine(fineId);
       if (res.success) {
         loadFines();
       } else {
         alert('Failed to process payment.');
+      }
+    }
+  };
+
+  const handleFoundBook = async (fine) => {
+    const confirmed = await api.showConfirmDialog({
+      title: 'Confirm Book Found',
+      message: 'Are you sure this book has been found?',
+      detail: 'This will cancel the fine and return the book to circulation.'
+    });
+    if (confirmed) {
+      const res = await api.foundBook({ fineId: fine.id, borrowRecordId: fine.borrow_record_id, bookId: fine.book_id });
+      if (res.success) {
+        loadFines();
+      } else {
+        alert('Failed to process the found book.');
       }
     }
   };
@@ -1059,6 +1085,7 @@ function FinesPanel() {
         <select value={filter} onChange={e => setFilter(e.target.value)} className="availability-filter">
           <option value="unpaid">Unpaid</option>
           <option value="paid">Paid</option>
+          <option value="canceled">Canceled</option>
           <option value="all">All Fines</option>
         </select>
       </div>
@@ -1070,11 +1097,16 @@ function FinesPanel() {
               <td>{f.member_name} ({f.member_identifier})</td>
               <td style={{textTransform: 'capitalize'}}>{f.reason}</td>
               <td>{f.book_title || 'N/A'}</td>
-              <td>${parseFloat(f.amount).toFixed(2)}</td>
+              <td>KES {parseFloat(f.amount).toFixed(2)}</td>
               <td>{new Date(f.date_issued).toLocaleString()}</td>
               <td>
                 {f.status === 'unpaid' && (
-                  <button className="small-btn primary" onClick={() => handlePayFine(f.id)}>Mark Paid</button>
+                  <div style={{display: 'flex', gap: '5px'}}>
+                    <button className="small-btn primary" onClick={() => handlePayFine(f.id)}>Mark Paid</button>
+                    {f.reason === 'lost' && (
+                      <button className="small-btn info" onClick={() => handleFoundBook(f)}>Found Book</button>
+                    )}
+                  </div>
                 )}
               </td>
             </tr>
@@ -1099,7 +1131,11 @@ function ReservationsPanel() {
   }, []);
 
   const handleCancel = async (id) => {
-    if (window.confirm('Are you sure you want to cancel this reservation?')) {
+    const confirmed = await api.showConfirmDialog({
+      title: 'Cancel Reservation',
+      message: 'Are you sure you want to cancel this reservation?',
+    });
+    if (confirmed) {
       await api.cancelReservation(id);
       loadReservations();
     }
@@ -1135,6 +1171,8 @@ function AllBorrowedView() {
   const [records, setRecords] = useState([]);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   useEffect(() => {
     window.api.getAllBorrowedItems().then(res => { if(res.success) setRecords(res.records); });
@@ -1166,14 +1204,29 @@ function AllBorrowedView() {
       (r.student_name && r.student_name.toLowerCase().includes(s)) ||
       (r.member_identifier && r.member_identifier.toLowerCase().includes(s)) ||
       (r.admission_number && r.admission_number.toLowerCase().includes(s));
-    return matchesFilter && matchesSearch;
+      
+    const matchesDate = (() => {
+      if (!startDate && !endDate) return true;
+      const recordDate = new Date(r.borrowed_date);
+      if (startDate) {
+        const start = new Date(startDate + 'T00:00:00');
+        if (recordDate < start) return false;
+      }
+      if (endDate) {
+        const end = new Date(endDate + 'T23:59:59');
+        if (recordDate > end) return false;
+      }
+      return true;
+    })();
+
+    return matchesFilter && matchesSearch && matchesDate;
   });
 
   return (
     <div className="all-borrowed-view">
       <div className="inventory-header">
         <h2>All Currently Borrowed Books</h2>
-        <div style={{display: 'flex', gap: '10px', alignItems: 'center'}}>
+        <div style={{display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap'}}>
           <input type="text" placeholder="Search book, student, or ID..." value={search} onChange={e => setSearch(e.target.value)} className="search-bar" />
           <select value={filter} onChange={(e) => setFilter(e.target.value)} className="availability-filter" style={{width: '180px'}}>
             <option value="all">Show All</option>
@@ -1181,22 +1234,31 @@ function AllBorrowedView() {
             <option value="overdue">Overdue Books</option>
             <option value="lost">Lost Books</option>
           </select>
+          <div className="date-filter-group" style={{display: 'flex', gap: '5px', alignItems: 'center'}}>
+            <label htmlFor="start-date" style={{fontSize: '0.9rem', color: '#555'}}>From:</label>
+            <input id="start-date" type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{padding: '5px', border: '1px solid #ccc', borderRadius: '4px'}} />
+          </div>
+          <div className="date-filter-group" style={{display: 'flex', gap: '5px', alignItems: 'center'}}>
+            <label htmlFor="end-date" style={{fontSize: '0.9rem', color: '#555'}}>To:</label>
+            <input id="end-date" type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={{padding: '5px', border: '1px solid #ccc', borderRadius: '4px'}} />
+          </div>
           <button onClick={handlePrintOverdue} className="secondary">Print Overdue List</button>
         </div>
       </div>
       <table className="data-table">
-        <thead><tr><th>Book</th><th>Borrower</th><th>ID</th><th>Due Date</th><th>Copy #</th><th>Status</th></tr></thead>
+        <thead><tr><th>Book</th><th>Borrower</th><th>ID</th><th>Borrowed Date</th><th>Due Date</th><th>Copy #</th><th>Status</th></tr></thead>
         <tbody>
           {filteredRecords.map(r => (
             <tr key={r.id}>
               <td>{r.title}</td>
-              <td>{r.member_name || r.student_name}</td>
-              <td>{r.member_identifier || r.admission_number}</td>
               <td>
+                {r.member_name || r.student_name}
                 {r.additional_members && r.additional_members.length > 0 && (
-                  <span className="badge" style={{backgroundColor: '#6c757d', color: 'white', fontSize: '0.75rem'}}>+ {r.additional_members.length} Group</span>
+                  <span className="badge" style={{backgroundColor: '#6c757d', color: 'white', fontSize: '0.75rem', marginLeft: '5px'}}>+ {r.additional_members.length}</span>
                 )}
               </td>
+              <td>{r.member_identifier || r.admission_number}</td>
+              <td>{new Date(r.borrowed_date).toLocaleDateString()}</td>
               <td style={{color: new Date(r.due_date) < new Date() ? 'red' : 'inherit'}}>
                 {new Date(r.due_date).toLocaleDateString()}
               </td>
@@ -1483,25 +1545,39 @@ function MainScreen({ user, onLogout, onUserUpdate }) {
   };
 
   const handleReturn = async (bookId, recordId) => {
-    const result = await api.returnBook({ bookId, recordId });
-    if (result.success) {
-      // Refresh books from backend to ensure consistency
-      const fetchedBooks = await api.getBooks();
-      setBooks(fetchedBooks);
+    const confirmed = await window.api.showConfirmDialog({
+      title: 'Confirm Book Return',
+      message: 'Are you sure you want to return this book?',
+      detail: 'This will mark the book as available. An overdue fine may be generated if applicable.'
+    });
 
-      // Refresh overdue books
-      const overdueResult = await api.getOverdueBooks();
-      if (overdueResult.success) {
-        setOverdueBooks(overdueResult.overdueBooks);
+    if (confirmed) {
+      const result = await api.returnBook({ bookId, recordId });
+      if (result.success) {
+        // Refresh books from backend to ensure consistency
+        const fetchedBooks = await api.getBooks();
+        setBooks(fetchedBooks);
+
+        // Refresh overdue books
+        const overdueResult = await api.getOverdueBooks();
+        if (overdueResult.success) {
+          setOverdueBooks(overdueResult.overdueBooks);
+        }
+        setSelectedBook(null); // Close modal on success
+      } else {
+        alert('Failed to return book: ' + (result.message || 'Unknown error'));
       }
-      setSelectedBook(null); // Close modal on success
-    } else {
-      alert('Failed to return book: ' + (result.message || 'Unknown error'));
     }
   };
 
   const handleMarkLost = async (bookId, recordId) => {
-    if (!window.confirm("Are you sure you want to mark this book as LOST?")) return;
+    const confirmed = await api.showConfirmDialog({
+        title: 'Mark Book as Lost',
+        message: 'Are you sure you want to mark this book as LOST?',
+        detail: 'This will create a fine for the replacement cost and permanently reduce the book\'s total copies.'
+    });
+    if (!confirmed) return;
+
     const result = await api.markBookLost({ bookId, recordId });
     if (result.success) {
       const fetchedBooks = await api.getBooks();

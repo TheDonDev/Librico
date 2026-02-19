@@ -91,10 +91,24 @@ ipcMain.handle('get-books', async () => {
   try {
     const books = await db('books').select('*');
     
+    // Self-healing: Fix inconsistencies where copies_available > total_copies
+    const inconsistentBooks = books.filter(b => b.copies_available > b.total_copies);
+    if (inconsistentBooks.length > 0) {
+      console.log(`[Auto-Fix] Correcting ${inconsistentBooks.length} books with available > total copies.`);
+      await Promise.all(inconsistentBooks.map(b => 
+        db('books').where('id', b.id).update({ copies_available: b.total_copies })
+      ));
+      // Reflect changes in the response immediately
+      inconsistentBooks.forEach(b => { b.copies_available = b.total_copies; });
+    }
+    
     const hasBorrowedRecords = await db.schema.hasTable('borrowed_records');
     let borrowedRecords = [];
     if (hasBorrowedRecords) {
-      borrowedRecords = await db('borrowed_records').where('returned', false).select('*');
+      borrowedRecords = await db('borrowed_records')
+        .where('returned', false)
+        .andWhereNot('status', 'lost')
+        .select('*');
     }
     
     const booksWithRecords = books.map(book => {
@@ -212,6 +226,10 @@ ipcMain.handle('return-book', async (event, { bookId, recordId }) => {
     const record = await db('borrowed_records').where({ id: recordId }).first();
     if (!record) throw new Error('Borrow record not found.');
 
+    if (record.returned) {
+      return { success: false, message: 'This book has already been returned.' };
+    }
+
     await db.transaction(async trx => {
       // Check for overdue fine
       const now = new Date();
@@ -260,11 +278,14 @@ ipcMain.handle('mark-book-lost', async (event, { bookId, recordId }) => {
       const record = await trx('borrowed_records').where({ id: recordId }).first();
       if (!record) throw new Error('Borrow record not found.');
 
-      // Update status
+      // Update status to 'lost' and keep returned as false so it shows as 'Lost' in history
       await trx('borrowed_records').where('id', recordId).update({ status: 'lost', returned: false });
 
+      // We do NOT decrement total_copies. The book is still part of the library's assets, just lost.
+      // copies_available remains untouched because the book was already checked out (unavailable).
+
       // Add fine for replacement cost
-      const book = await trx('books').where({ id: bookId }).first();
+      const book = await trx('books').where({ id: bookId }).first(); // re-fetch book to get cost
       const replacementCost = parseFloat(book?.replacement_cost || 0);
       if (replacementCost > 0 && record.member_id) {
         await trx('fines').insert({
@@ -325,6 +346,7 @@ ipcMain.handle('get-overdue-books', async () => {
       .join('books', 'borrowed_records.book_id', 'books.id')
       .where('borrowed_records.returned', false)
       .andWhere('borrowed_records.due_date', '<', now)
+      .andWhereNot('borrowed_records.status', 'lost') // Exclude lost books from overdue notifications
       .select(
         'books.title',
         'borrowed_records.student_name',
@@ -630,7 +652,11 @@ ipcMain.handle('get-all-borrowed-items', async () => {
     const records = await db('borrowed_records')
       .join('books', 'borrowed_records.book_id', 'books.id')
       .leftJoin('members', 'borrowed_records.member_id', 'members.id')
-      .where('borrowed_records.returned', false)
+      // Fetch records that are either actively borrowed OR have been marked as lost (but not yet resolved)
+      .where((builder) => {
+        builder.where('borrowed_records.returned', false)
+               .orWhere('borrowed_records.status', 'lost');
+      })
       .select(
         'borrowed_records.*',
         'books.title',
@@ -719,7 +745,8 @@ ipcMain.handle('get-all-fines', async () => {
         'fines.*',
         'members.name as member_name',
         'members.identifier as member_identifier',
-        'books.title as book_title'
+        'books.title as book_title',
+        'borrowed_records.book_id'
       )
       .orderBy('fines.date_issued', 'desc');
     return { success: true, fines };
@@ -731,14 +758,73 @@ ipcMain.handle('get-all-fines', async () => {
 
 ipcMain.handle('pay-fine', async (event, fineId) => {
   try {
-    await db('fines').where({ id: fineId }).update({
-      status: 'paid',
-      date_paid: new Date().toISOString(),
+    const fine = await db('fines').where({ id: fineId }).first();
+    if (!fine) throw new Error('Fine not found.');
+
+    await db.transaction(async trx => {
+      await trx('fines').where({ id: fineId }).update({
+        status: 'paid',
+        date_paid: new Date().toISOString(),
+      });
+
+      // If the fine is for a lost book, paying it implies replacement/compensation.
+      // We should return the book count to circulation, close the borrow record, and mark as Lost-Paid.
+      if ((fine.reason === 'lost' || fine.reason === 'Lost') && fine.borrow_record_id) {
+        const record = await trx('borrowed_records').where({ id: fine.borrow_record_id }).first();
+        if (record) {
+          if (!record.returned) {
+            await trx('borrowed_records').where({ id: fine.borrow_record_id }).update({
+              returned: true,
+              status: 'Lost-Paid'
+            });
+            await trx('books').where({ id: record.book_id }).increment('copies_available', 1);
+          } else if (record.status === 'lost') {
+            // Edge case: If somehow returned but still status 'lost', just update status to clear dashboard
+            await trx('borrowed_records').where({ id: fine.borrow_record_id }).update({ status: 'Lost-Paid' });
+          }
+        }
+      }
     });
+
     return { success: true };
   } catch (error) {
     console.error('Pay fine error:', error);
     return { success: false, message: 'Failed to process payment.' };
+  }
+});
+
+ipcMain.handle('found-book', async (event, { fineId, borrowRecordId, bookId }) => {
+  try {
+    await db.transaction(async trx => {
+      // 1. Cancel the fine associated with the lost book.
+      // We'll update its status to 'canceled' to distinguish it from a paid fine.
+      await trx('fines').where({ id: fineId }).update({
+        status: 'canceled',
+        reason: 'lost-found'
+      });
+
+      // 2. Update the borrowing record status to 'found'.
+      // It remains 'returned' so it doesn't show up in active borrows.
+      let bookIdToUpdate = bookId;
+      if (borrowRecordId) {
+        const record = await trx('borrowed_records').where({ id: borrowRecordId }).first();
+        if (record) bookIdToUpdate = bookIdToUpdate || record.book_id;
+        await trx('borrowed_records').where({ id: borrowRecordId }).update({ 
+          status: 'found',
+          returned: true 
+        });
+      }
+
+      // 3. Return the book copy to circulation.
+      if (bookIdToUpdate) {
+        await trx('books').where({ id: bookIdToUpdate }).increment('copies_available', 1);
+      }
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error('Found book error:', error);
+    return { success: false, message: 'Failed to process the found book.' };
   }
 });
 

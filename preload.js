@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('api', {
   // Fines
   getAllFines: () => ipcRenderer.invoke('get-all-fines'),
   payFine: (fineId) => ipcRenderer.invoke('pay-fine', fineId),
+  foundBook: (data) => ipcRenderer.invoke('found-book', data),
   // Reservations
   getAllReservations: () => ipcRenderer.invoke('get-all-reservations'),
   createReservation: (data) => ipcRenderer.invoke('create-reservation', data),
