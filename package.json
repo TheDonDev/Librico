@@ -12,8 +12,8 @@
     "dev:react": "npm run dev --workspace=renderer",
     "dev:electron": "wait-on http://localhost:5173 && nodemon --exec \"electron .\"",
     "build": "npm run build --workspace=renderer",
-    "package": "npm run build && electron-builder",
-    "make": "npm run package"
+    "dist": "npm run build && electron-builder",
+    "make": "npm run dist"
   },
   "keywords": [],
   "author": {

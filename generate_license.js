@@ -6,14 +6,16 @@ const nodemailer = require('nodemailer');
 const LICENSE_SECRET = 'your-super-secret-key-librico-2024'; 
 
 function generateLicense(schoolName) {
-  // Generate expiry date for one year from now
-  const now = new Date();
-  now.setFullYear(now.getFullYear() + 1);
-  const expiryDate = now.toISOString().split('T')[0]; // Format: YYYY-MM-DD
+  // Set expiry to 'LIFETIME' for a lifetime license
+  const expiryDate = 'LIFETIME';
+
+  // Add a random nonce to ensure the key is unique for each generation
+  const nonce = crypto.randomBytes(4).toString('hex');
 
   const data = JSON.stringify({ 
     school: schoolName, 
-    expiry: expiryDate
+    expiry: expiryDate,
+    nonce: nonce
   });
   
   // Create signature

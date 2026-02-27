@@ -18,7 +18,9 @@ const LicenseWidget = () => {
           const { isValid, expiry, school } = result.validation;
           
           let daysLeft = null;
-          if (expiry) {
+          if (expiry === 'LIFETIME') {
+            daysLeft = 'LIFETIME';
+          } else if (expiry) {
             const now = new Date();
             const expiryDate = new Date(expiry);
             const diffTime = expiryDate - now;
@@ -58,6 +60,11 @@ const LicenseWidget = () => {
      borderColor = '#f56565';
      textColor = '#c53030';
      statusMessage = 'Unlicensed';
+  } else if (state.expiry === 'LIFETIME') {
+     bgColor = '#c6f6d5'; // Green
+     borderColor = '#38a169';
+     textColor = '#2f855a';
+     statusMessage = 'Lifetime License';
   } else if (!state.isValid || (state.daysLeft !== null && state.daysLeft <= 0)) {
      bgColor = '#fed7d7'; // Red
      borderColor = '#f56565';
@@ -88,7 +95,8 @@ const LicenseWidget = () => {
     }}>
       <h4 style={{ margin: '0 0 5px 0', fontSize: '0.85rem', textTransform: 'uppercase', opacity: 0.8 }}>Subscription Status</h4>
       <div style={{ fontSize: '1.8rem', fontWeight: 'bold', margin: '5px 0' }}>{statusMessage}</div>
-      {state.expiry && <div style={{ fontSize: '0.8rem' }}>Expires: {new Date(state.expiry).toLocaleDateString()}</div>}
+      {state.expiry && state.expiry !== 'LIFETIME' && <div style={{ fontSize: '0.8rem' }}>Expires: {new Date(state.expiry).toLocaleDateString()}</div>}
+      {state.expiry === 'LIFETIME' && <div style={{ fontSize: '0.8rem' }}>Never Expires</div>}
     </div>
   );
 };
