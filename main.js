@@ -75,16 +75,7 @@ function validateLicense(licenseKey) {
     // Check Expiry
     const data = JSON.parse(dataString);
 
-    if (data.expiry === 'LIFETIME') {
-      return { isValid: true, expiry: 'LIFETIME', school: data.school };
-    }
-
-    const expiryDate = new Date(data.expiry);
-    const now = new Date();
-
-    if (now > expiryDate) return { isValid: false, reason: 'Expired', expiry: data.expiry, school: data.school };
-
-    return { isValid: true, expiry: data.expiry, school: data.school };
+    return { isValid: true, expiry: 'LIFETIME', school: data.school };
   } catch (e) {
     console.error('License validation error:', e);
     return { isValid: false, reason: 'Corrupt key' };

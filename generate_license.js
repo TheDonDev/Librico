@@ -6,15 +6,12 @@ const nodemailer = require('nodemailer');
 const LICENSE_SECRET = 'your-super-secret-key-librico-2024'; 
 
 function generateLicense(schoolName) {
-  // Set expiry to 'LIFETIME' for a lifetime license
-  const expiryDate = 'LIFETIME';
-
   // Add a random nonce to ensure the key is unique for each generation
   const nonce = crypto.randomBytes(4).toString('hex');
 
   const data = JSON.stringify({ 
     school: schoolName, 
-    expiry: expiryDate,
+    expiry: 'LIFETIME',
     nonce: nonce
   });
   
@@ -23,10 +20,10 @@ function generateLicense(schoolName) {
   
   // Combine data and signature, then encode to Base64
   const licenseKey = Buffer.from(`${data}|${signature}`).toString('base64');
-  return { licenseKey, expiryDate };
+  return { licenseKey };
 }
 
-async function sendLicenseEmail(schoolName, email, licenseKey, expiryDate) {
+async function sendLicenseEmail(schoolName, email, licenseKey) {
   const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
@@ -44,7 +41,6 @@ async function sendLicenseEmail(schoolName, email, licenseKey, expiryDate) {
         <h2 style="color: #2c3e50;">Librico License Key</h2>
         <p>Hello,</p>
         <p>Here is the license key for <strong>${schoolName}</strong>.</p>
-        <p><strong>Expiry Date:</strong> ${expiryDate}</p>
         <div style="background: #f8f9fa; padding: 15px; border: 1px solid #e9ecef; border-radius: 5px; word-break: break-all; font-family: monospace; margin: 20px 0; color: #e83e8c;">
           ${licenseKey}
         </div>
@@ -69,15 +65,14 @@ if (args.length < 1) {
 const [schoolName, email] = args;
 
 try {
-  const { licenseKey, expiryDate } = generateLicense(schoolName);
+  const { licenseKey } = generateLicense(schoolName);
   console.log('--- GENERATED LICENSE KEY ---');
   console.log(licenseKey);
   console.log('-----------------------------');
   console.log(`Licensed To: ${schoolName}`);
-  console.log(`Expires On: ${expiryDate}`);
 
   if (email) {
-    sendLicenseEmail(schoolName, email, licenseKey, expiryDate).catch(err => {
+    sendLicenseEmail(schoolName, email, licenseKey).catch(err => {
       console.error('❌ Failed to send email:', err);
     });
   }

@@ -65,8 +65,7 @@ const LicenseSettings = () => {
           color: status.isValid ? '#155724' : '#721c24',
           border: `1px solid ${status.isValid ? '#c3e6cb' : '#f5c6cb'}`
         }}>
-          <strong>Status: {status.isValid ? 'Active' : 'Invalid / Expired'}</strong>
-          {status.expiry && <div>Expires: {new Date(status.expiry).toLocaleDateString()}</div>}
+          <strong>Status: {status.isValid ? 'Active (Lifetime)' : 'Invalid'}</strong>
           {status.school && <div>Licensed to: {status.school}</div>}
           {!status.isValid && status.reason && <div>Reason: {status.reason}</div>}
         </div>

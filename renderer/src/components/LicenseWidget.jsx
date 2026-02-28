@@ -2,9 +2,7 @@ import React, { useState, useEffect } from 'react';
 
 const LicenseWidget = () => {
   const [state, setState] = useState({
-    daysLeft: null,
     isValid: false,
-    expiry: null,
     loading: true,
     schoolName: ''
   });
@@ -15,23 +13,10 @@ const LicenseWidget = () => {
         const result = await window.api.getSettings();
         
         if (result.success && result.validation) {
-          const { isValid, expiry, school } = result.validation;
-          
-          let daysLeft = null;
-          if (expiry === 'LIFETIME') {
-            daysLeft = 'LIFETIME';
-          } else if (expiry) {
-            const now = new Date();
-            const expiryDate = new Date(expiry);
-            const diffTime = expiryDate - now;
-            // Calculate days (1 day = 1000ms * 60s * 60m * 24h)
-            daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
-          }
+          const { isValid, school } = result.validation;
 
           setState({
-            daysLeft,
             isValid,
-            expiry,
             schoolName: school,
             loading: false
           });
@@ -54,32 +39,16 @@ const LicenseWidget = () => {
   let textColor = '#2d3748';
   let statusMessage = 'No License Found';
 
-  if (!state.expiry) {
-     // No license key or invalid format
-     bgColor = '#fed7d7'; // Red
-     borderColor = '#f56565';
-     textColor = '#c53030';
-     statusMessage = 'Unlicensed';
-  } else if (state.expiry === 'LIFETIME') {
+  if (state.isValid) {
      bgColor = '#c6f6d5'; // Green
      borderColor = '#38a169';
      textColor = '#2f855a';
      statusMessage = 'Lifetime License';
-  } else if (!state.isValid || (state.daysLeft !== null && state.daysLeft <= 0)) {
+  } else {
      bgColor = '#fed7d7'; // Red
      borderColor = '#f56565';
      textColor = '#c53030';
-     statusMessage = 'Expired';
-  } else if (state.daysLeft <= 30) {
-     bgColor = '#feebc8'; // Yellow/Orange
-     borderColor = '#dd6b20';
-     textColor = '#c05621';
-     statusMessage = `${state.daysLeft} Days Left`;
-  } else {
-     bgColor = '#c6f6d5'; // Green
-     borderColor = '#38a169';
-     textColor = '#2f855a';
-     statusMessage = `${state.daysLeft} Days Remaining`;
+     statusMessage = 'Unlicensed';
   }
 
   return (
@@ -93,10 +62,9 @@ const LicenseWidget = () => {
       boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
       minWidth: '200px'
     }}>
-      <h4 style={{ margin: '0 0 5px 0', fontSize: '0.85rem', textTransform: 'uppercase', opacity: 0.8 }}>Subscription Status</h4>
+      <h4 style={{ margin: '0 0 5px 0', fontSize: '0.85rem', textTransform: 'uppercase', opacity: 0.8 }}>License Status</h4>
       <div style={{ fontSize: '1.8rem', fontWeight: 'bold', margin: '5px 0' }}>{statusMessage}</div>
-      {state.expiry && state.expiry !== 'LIFETIME' && <div style={{ fontSize: '0.8rem' }}>Expires: {new Date(state.expiry).toLocaleDateString()}</div>}
-      {state.expiry === 'LIFETIME' && <div style={{ fontSize: '0.8rem' }}>Never Expires</div>}
+      {state.isValid && <div style={{ fontSize: '0.8rem' }}>Never Expires</div>}
     </div>
   );
 };
