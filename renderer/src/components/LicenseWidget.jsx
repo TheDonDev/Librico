@@ -43,7 +43,7 @@ const LicenseWidget = () => {
      bgColor = '#c6f6d5'; // Green
      borderColor = '#38a169';
      textColor = '#2f855a';
-     statusMessage = 'Lifetime License';
+     statusMessage = 'Active';
   } else {
      bgColor = '#fed7d7'; // Red
      borderColor = '#f56565';
@@ -64,7 +64,6 @@ const LicenseWidget = () => {
     }}>
       <h4 style={{ margin: '0 0 5px 0', fontSize: '0.85rem', textTransform: 'uppercase', opacity: 0.8 }}>License Status</h4>
       <div style={{ fontSize: '1.8rem', fontWeight: 'bold', margin: '5px 0' }}>{statusMessage}</div>
-      {state.isValid && <div style={{ fontSize: '0.8rem' }}>Never Expires</div>}
     </div>
   );
 };

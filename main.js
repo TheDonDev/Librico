@@ -57,28 +57,29 @@ const LICENSE_SECRET = 'your-super-secret-key-librico-2024'; // In production, u
 
 function validateLicense(licenseKey) {
   try {
-    if (!licenseKey) return { isValid: false, reason: 'No key provided' };
+    if (!licenseKey) return { isValid: false, reason: 'Unlicensed. Please enter a valid license key.', canBorrow: false };
     
     // Decode Base64
     const decoded = Buffer.from(licenseKey, 'base64').toString('utf-8');
     const parts = decoded.split('|');
     
     // We expect JSON|Signature
-    if (parts.length !== 2) return { isValid: false, reason: 'Invalid format' };
+    if (parts.length !== 2) return { isValid: false, reason: 'Invalid license key format.', canBorrow: false };
     
     const [dataString, signature] = parts;
     
     // Verify Signature
     const expectedSignature = crypto.createHmac('sha256', LICENSE_SECRET).update(dataString).digest('hex');
-    if (signature !== expectedSignature) return { isValid: false, reason: 'Invalid signature' };
+    if (signature !== expectedSignature) return { isValid: false, reason: 'Invalid license key.', canBorrow: false };
 
     // Check Expiry
     const data = JSON.parse(dataString);
 
-    return { isValid: true, expiry: 'LIFETIME', school: data.school };
+    // For a licensed application, show a simple "Active" status.
+    return { isValid: true, expiry: 'Active', school: data.school, canBorrow: true };
   } catch (e) {
     console.error('License validation error:', e);
-    return { isValid: false, reason: 'Corrupt key' };
+    return { isValid: false, reason: 'The license key is corrupt or invalid.', canBorrow: false };
   }
 }
 
