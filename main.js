@@ -234,7 +234,7 @@ ipcMain.handle('return-book', async (event, { bookId, recordId }) => {
       if (now > dueDate) {
         const settings = await trx('settings').select('*');
         const finePerDaySetting = settings.find(s => s.key === 'fine_per_day');
-        const finePerDay = parseFloat(finePerDaySetting?.value || 0);
+        const finePerDay = parseFloat(finePerDaySetting?.value || '10.00');
 
         if (finePerDay > 0) {
           const daysOverdue = Math.ceil((now - dueDate) / (1000 * 60 * 60 * 24));
@@ -980,6 +980,11 @@ ipcMain.handle('get-settings', async () => {
       return acc;
     }, {});
     
+    // Ensure a default fine_per_day exists if not set
+    if (settings.fine_per_day === undefined) {
+      settings.fine_per_day = '10.00';
+    }
+
     const validation = validateLicense(settings.license_key);
     
     return { success: true, settings, validation };
