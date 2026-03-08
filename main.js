@@ -588,6 +588,27 @@ ipcMain.handle('add-member', async (event, member) => {
   }
 });
 
+// Update a member
+ipcMain.handle('update-member', async (event, member) => {
+  try {
+    const { id, ...updates } = member;
+    
+    // Check if the new identifier is already in use by another member
+    if (updates.identifier) {
+      const existing = await db('members').where({ identifier: updates.identifier }).whereNot({ id }).first();
+      if (existing) {
+        return { success: false, message: `Identifier ${updates.identifier} is already in use by another member.` };
+      }
+    }
+    
+    await db('members').where({ id }).update(updates);
+    return { success: true };
+  } catch (error) {
+    console.error('Update member error:', error);
+    return { success: false, message: 'Failed to update member.' };
+  }
+});
+
 // Get members (with optional search)
 ipcMain.handle('get-members', async (event, searchTerm) => {
   try {
@@ -601,6 +622,28 @@ ipcMain.handle('get-members', async (event, searchTerm) => {
   } catch (error) {
     console.error('Get members error:', error);
     return { success: false, message: 'Failed to fetch members.' };
+  }
+});
+
+// Delete a member
+ipcMain.handle('delete-member', async (event, memberId) => {
+  try {
+    // Check if member has any outstanding loans
+    const outstandingLoans = await db('borrowed_records').where({ member_id: memberId, returned: false }).first();
+    if (outstandingLoans) {
+      return { success: false, message: 'Cannot delete member. They have outstanding books.' };
+    }
+    // Optional: also check for unpaid fines
+    const unpaidFines = await db('fines').where({ member_id: memberId, status: 'unpaid' }).first();
+    if (unpaidFines) {
+      return { success: false, message: 'Cannot delete member. They have unpaid fines.' };
+    }
+
+    await db('members').where({ id: memberId }).del();
+    return { success: true };
+  } catch (error) {
+    console.error('Delete member error:', error);
+    return { success: false, message: 'Failed to delete member.' };
   }
 });
 
@@ -1028,6 +1071,38 @@ ipcMain.handle('export-books-csv', async () => {
   } catch (error) {
     console.error('Export books to CSV error:', error);
     return { success: false, message: 'Failed to export books.' };
+  }
+});
+
+ipcMain.handle('export-members-csv', async () => {
+  try {
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: 'Export Members to CSV',
+      defaultPath: `librico-members-backup-${new Date().toISOString().split('T')[0]}.csv`,
+      filters: [{ name: 'CSV Files', extensions: ['csv'] }],
+    });
+
+    if (canceled || !filePath) {
+      return { success: false, message: 'Export cancelled.' };
+    }
+
+    const members = await db('members').select('*');
+    if (members.length === 0) {
+      return { success: false, message: 'No members to export.' };
+    }
+
+    const columns = Object.keys(members[0]);
+    const header = columns.map(escapeCsvField).join(',') + '\n';
+    const csvRows = members.map(member => 
+      columns.map(col => escapeCsvField(member[col])).join(',')
+    ).join('\n');
+
+    await fs.writeFile(filePath, header + csvRows);
+
+    return { success: true, message: `Successfully exported ${members.length} members.` };
+  } catch (error) {
+    console.error('Export members to CSV error:', error);
+    return { success: false, message: 'Failed to export members.' };
   }
 });
 

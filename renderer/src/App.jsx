@@ -781,6 +781,21 @@ function AdminPanel() {
     if (!result.success) setExportMessage(`Restore failed: ${result.message}`);
   };
 
+  const handleExportMembers = async () => {
+    clearMessages();
+    setExportMessage('Exporting members...');
+    try {
+      const result = await api.exportMembersCsv();
+      if (result.success) {
+        setExportMessage(result.message);
+      } else {
+        setExportMessage(`Export failed: ${result.message || 'An unknown error occurred.'}`);
+      }
+    } catch (err) {
+      setExportMessage(`An error occurred: ${err.message}`);
+    }
+  };
+
   return (
     <div className="admin-panel">
       <h2>Manage Librarians</h2>
@@ -807,6 +822,7 @@ function AdminPanel() {
         <p>Manage your library data. Export to CSV for reporting, or backup the entire database file for safety.</p>
         <div className="actions" style={{ justifyContent: 'flex-start', gap: '10px' }}>
           <button onClick={handleExportBooks} className="secondary">Export Books</button>
+          <button onClick={handleExportMembers} className="secondary">Export Members</button>
           <button onClick={handleExportBorrowHistory} className="secondary">Export Borrow History</button>
           <button onClick={handleBackupDatabase} className="primary">Backup Database</button>
           <button onClick={handleRestoreDatabase} className="danger" style={{backgroundColor: '#dc3545', borderColor: '#dc3545', color: 'white'}}>Restore Database</button>
@@ -871,6 +887,7 @@ function MembersPanel() {
   const [members, setMembers] = useState([]);
   const [search, setSearch] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [editingMember, setEditingMember] = useState(null);
   const [selectedMember, setSelectedMember] = useState(null);
   const { api } = window;
 
@@ -901,13 +918,52 @@ function MembersPanel() {
     }
   };
 
+  const handleUpdateMember = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await api.updateMember(editingMember);
+      if (res.success) {
+        setEditingMember(null);
+        loadMembers();
+      } else {
+        alert(res.message || 'Failed to update member.');
+      }
+    } catch (err) {
+      alert(`An error occurred: ${err.message}`);
+    }
+  };
+
+  const handleDeleteMember = async (memberId) => {
+    try {
+      const confirmed = await api.showConfirmDialog({
+        title: 'Delete Member',
+        message: 'Are you sure you want to delete this member?',
+        detail: 'This action cannot be undone. Members with outstanding loans or fines cannot be deleted.'
+      });
+      if (confirmed) {
+        const res = await api.deleteMember(memberId);
+        if (res.success) {
+          loadMembers();
+        } else {
+          alert(`Failed to delete member: ${res.message}`);
+        }
+      }
+    } catch (err) {
+      alert(`An error occurred: ${err.message}`);
+    }
+  };
+
   const handleImportMembers = async () => {
-    const res = await api.importMembersFromCsv();
-    if (res.success) {
-      alert(res.message);
-      loadMembers();
-    } else {
-      alert(res.message);
+    try {
+      const res = await api.importMembersFromCsv();
+      if (res.success) {
+        alert(res.message);
+        loadMembers();
+      } else {
+        alert(res.message || 'Failed to import members.');
+      }
+    } catch (err) {
+      alert(`An error occurred: ${err.message}`);
     }
   };
 
@@ -947,7 +1003,13 @@ function MembersPanel() {
                 <td><span className={`badge ${m.type.toLowerCase()}`}>{m.type}</span></td>
                 <td>{m.identifier}</td>
                 <td>{m.additional_info}</td>
-                <td><button className="small-btn secondary" onClick={() => openMemberDetails(m.id)}>View Details</button></td>
+                <td>
+                  <div style={{display: 'flex', gap: '5px'}}>
+                    <button className="small-btn secondary" onClick={() => openMemberDetails(m.id)}>View</button>
+                    <button className="small-btn" onClick={() => setEditingMember({...m})}>Edit</button>
+                    <button className="small-btn danger" onClick={() => handleDeleteMember(m.id)}>Delete</button>
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -967,6 +1029,27 @@ function MembersPanel() {
               <input type="text" placeholder={newType === 'Student' ? "Admission Number" : "TSC Number"} value={newIdentifier} onChange={e => setNewIdentifier(e.target.value)} required />
               <input type="text" placeholder={newType === 'Student' ? "Form / Class" : "Department / Contact"} value={newInfo} onChange={e => setNewInfo(e.target.value)} />
               <button type="submit">Save Member</button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {editingMember && (
+        <div className="modal-backdrop" onClick={() => setEditingMember(null)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <h3>Edit Member</h3>
+            <form onSubmit={handleUpdateMember} className="book-form">
+              <input type="text" placeholder="Full Name" value={editingMember.name} onChange={e => setEditingMember({...editingMember, name: e.target.value})} required />
+              <select value={editingMember.type} onChange={e => setEditingMember({...editingMember, type: e.target.value})}>
+                <option value="Student">Student</option>
+                <option value="Teacher">Teacher</option>
+              </select>
+              <input type="text" placeholder={editingMember.type === 'Student' ? "Admission Number" : "TSC Number"} value={editingMember.identifier} onChange={e => setEditingMember({...editingMember, identifier: e.target.value})} required />
+              <input type="text" placeholder={editingMember.type === 'Student' ? "Form / Class" : "Department / Contact"} value={editingMember.additional_info || ''} onChange={e => setEditingMember({...editingMember, additional_info: e.target.value})} />
+              <div className="actions">
+                <button type="submit">Save Changes</button>
+                <button type="button" className="secondary" onClick={() => setEditingMember(null)}>Cancel</button>
+              </div>
             </form>
           </div>
         </div>
